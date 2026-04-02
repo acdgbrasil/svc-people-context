@@ -1,0 +1,61 @@
+import type { JwtVerifier, AuthContext } from "./jwt.ts";
+
+// ─── Types (discriminated union for auth results) ───────────────
+
+type AuthError = { readonly success: false; readonly error: { readonly code: string; readonly message: string } };
+
+export type AuthResult =
+  | { readonly kind: "ok"; readonly auth: AuthContext; readonly actorId: string }
+  | { readonly kind: "unauthorized"; readonly status: 401; readonly response: AuthError }
+  | { readonly kind: "forbidden"; readonly status: 403; readonly response: AuthError }
+  | { readonly kind: "missing-actor"; readonly status: 400; readonly response: AuthError };
+
+// ─── Auth guard (pure function — no framework coupling) ─────────
+
+export type AuthGuard = (
+  headers: Record<string, string | undefined>,
+  requiredRoles?: readonly string[],
+) => Promise<AuthResult>;
+
+export const createAuthGuard = (verify: JwtVerifier): AuthGuard =>
+  async (headers, requiredRoles) => {
+    const authorization = headers["authorization"];
+    if (!authorization?.startsWith("Bearer ")) {
+      return {
+        kind: "unauthorized",
+        status: 401,
+        response: { success: false, error: { code: "AUTH-001", message: "Authentication required" } },
+      };
+    }
+
+    const auth = await verify(authorization.slice(7));
+    if (!auth) {
+      return {
+        kind: "unauthorized",
+        status: 401,
+        response: { success: false, error: { code: "AUTH-001", message: "Invalid or expired token" } },
+      };
+    }
+
+    if (requiredRoles && requiredRoles.length > 0) {
+      const hasRole = requiredRoles.some((r) => auth.roles.includes(r));
+      if (!hasRole) {
+        return {
+          kind: "forbidden",
+          status: 403,
+          response: { success: false, error: { code: "AUTH-002", message: `Requires role: ${requiredRoles.join(" or ")}` } },
+        };
+      }
+    }
+
+    const actorId = headers["x-actor-id"];
+    if (!actorId) {
+      return {
+        kind: "missing-actor",
+        status: 400,
+        response: { success: false, error: { code: "AUTH-003", message: "X-Actor-Id header is required" } },
+      };
+    }
+
+    return { kind: "ok", auth, actorId };
+  };

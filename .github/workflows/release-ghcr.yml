@@ -1,0 +1,43 @@
+name: Build and Publish People Context Image
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - v*.*.*
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  container-image:
+    name: Build image and publish when applicable
+    uses: acdgbrasil/.github/.github/workflows/reusable-ghcr-build-push.yml@main
+    with:
+      service: ${{ github.event.repository.name }}
+      context: .
+      dockerfile: Dockerfile
+      registry: ${{ vars.REGISTRY != '' && vars.REGISTRY || 'ghcr.io' }}
+      image_namespace: ${{ vars.IMAGE_NAMESPACE != '' && vars.IMAGE_NAMESPACE || 'acdgbrasil' }}
+      push: ${{ github.event_name != 'pull_request' }}
+
+  publish-summary:
+    name: Publish summary
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs:
+      - container-image
+    permissions:
+      contents: read
+    steps:
+      - name: Show immutable image reference for production
+        run: |
+          echo "Image: ${{ needs.container-image.outputs.image }}"
+          echo "Digest: ${{ needs.container-image.outputs.digest }}"
+          echo "Use this reference in production:"
+          echo "${{ needs.container-image.outputs.image }}@${{ needs.container-image.outputs.digest }}"
