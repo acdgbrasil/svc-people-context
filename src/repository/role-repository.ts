@@ -16,8 +16,8 @@ type RoleQueryResult = {
 export type RoleRepository = {
   readonly assign: (personId: string, input: AssignRoleInput) => Promise<{ readonly role: SystemRole; readonly created: boolean }>;
   readonly listByPerson: (personId: string, active?: boolean) => Promise<readonly SystemRole[]>;
-  readonly deactivate: (personId: string, roleId: string) => Promise<boolean>;
-  readonly reactivate: (personId: string, roleId: string) => Promise<boolean>;
+  readonly deactivate: (personId: string, roleId: string) => Promise<SystemRole | null>;
+  readonly reactivate: (personId: string, roleId: string) => Promise<SystemRole | null>;
   readonly query: (system: string, role?: string, active?: boolean) => Promise<readonly RoleQueryResult[]>;
 }
 
@@ -25,26 +25,33 @@ const SELECT_ROLE = `id, person_id AS "personId", system, role, active, assigned
 
 export const createRoleRepository = (sql: Sql): RoleRepository => ({
   assign: async (personId, input) => {
-    const [existing] = await sql<SystemRole[]>`
-      SELECT ${sql.unsafe(SELECT_ROLE)} FROM system_roles
-      WHERE person_id = ${personId} AND system = ${input.system} AND role = ${input.role}
-    `;
+    // Wrap in transaction to prevent race condition on UNIQUE(person_id, system, role)
+    return sql.begin(async (_tx) => {
+      // TransactionSql loses call signature via Omit — cast to Sql for tagged templates
+      const tx = _tx as unknown as Sql;
 
-    if (existing) {
-      if (existing.active) return { role: existing, created: false };
-      const [reactivated] = await sql<SystemRole[]>`
-        UPDATE system_roles SET active = true WHERE id = ${existing.id}
+      const [existing] = await tx<SystemRole[]>`
+        SELECT ${sql.unsafe(SELECT_ROLE)} FROM system_roles
+        WHERE person_id = ${personId} AND system = ${input.system} AND role = ${input.role}
+        FOR UPDATE
+      `;
+
+      if (existing) {
+        if (existing.active) return { role: existing, created: false };
+        const [reactivated] = await tx<SystemRole[]>`
+          UPDATE system_roles SET active = true WHERE id = ${existing.id}
+          RETURNING ${sql.unsafe(SELECT_ROLE)}
+        `;
+        return { role: reactivated!, created: true };
+      }
+
+      const [row] = await tx<SystemRole[]>`
+        INSERT INTO system_roles (person_id, system, role)
+        VALUES (${personId}, ${input.system}, ${input.role})
         RETURNING ${sql.unsafe(SELECT_ROLE)}
       `;
-      return { role: reactivated!, created: true };
-    }
-
-    const [row] = await sql<SystemRole[]>`
-      INSERT INTO system_roles (person_id, system, role)
-      VALUES (${personId}, ${input.system}, ${input.role})
-      RETURNING ${sql.unsafe(SELECT_ROLE)}
-    `;
-    return { role: row!, created: true };
+      return { role: row!, created: true };
+    });
   },
 
   listByPerson: async (personId, active) => {
@@ -63,21 +70,21 @@ export const createRoleRepository = (sql: Sql): RoleRepository => ({
   },
 
   deactivate: async (personId, roleId) => {
-    const [row] = await sql`
+    const [row] = await sql<SystemRole[]>`
       UPDATE system_roles SET active = false
       WHERE id = ${roleId} AND person_id = ${personId} AND active = true
-      RETURNING id
+      RETURNING ${sql.unsafe(SELECT_ROLE)}
     `;
-    return !!row;
+    return row ?? null;
   },
 
   reactivate: async (personId, roleId) => {
-    const [row] = await sql`
+    const [row] = await sql<SystemRole[]>`
       UPDATE system_roles SET active = true
       WHERE id = ${roleId} AND person_id = ${personId} AND active = false
-      RETURNING id
+      RETURNING ${sql.unsafe(SELECT_ROLE)}
     `;
-    return !!row;
+    return row ?? null;
   },
 
   query: async (system, role, active = true) => {

@@ -22,7 +22,7 @@ const json = (body: unknown) => ({
 
 describe("POST /api/v1/people", () => {
   it("registers a person and returns 201 with id", async () => {
-    const { app } = setup();
+    const { app, publisher } = setup();
     const res = await app.handle(
       new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", birthDate: "1990-05-15" })),
     );
@@ -30,21 +30,29 @@ describe("POST /api/v1/people", () => {
     const body = await parseJson(res);
     expect(dataAs<IdData>(body).id).toBeDefined();
     expect(body.meta.timestamp).toBeDefined();
+
+    expect(publisher.published.length).toBe(1);
+    expect(publisher.published[0]!.subject).toBe("people.person.registered");
+    const eventData = (publisher.published[0]!.payload as { data: { fullName: string } }).data;
+    expect(eventData.fullName).toBe("Ana Costa");
   });
 
-  it("returns existing person on CPF dedup", async () => {
-    const { app } = setup();
+  it("returns existing person on CPF dedup (no event published)", async () => {
+    const { app, publisher } = setup();
     const first = await app.handle(
-      new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", cpf: "12345678901", birthDate: "1990-05-15" })),
+      new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", cpf: "52998224725", birthDate: "1990-05-15" })),
     );
     const firstBody = await parseJson(first);
+    expect(publisher.published.length).toBe(1);
 
     const second = await app.handle(
-      new Request("http://localhost/api/v1/people", json({ fullName: "Ana C.", cpf: "12345678901", birthDate: "1990-05-15" })),
+      new Request("http://localhost/api/v1/people", json({ fullName: "Ana C.", cpf: "52998224725", birthDate: "1990-05-15" })),
     );
     expect(second.status).toBe(201);
     const secondBody = await parseJson(second);
     expect(dataAs<IdData>(secondBody).id).toBe(dataAs<IdData>(firstBody).id);
+    // No new event on dedup
+    expect(publisher.published.length).toBe(1);
   });
 
   it("returns 422 for empty fullName (schema validation)", async () => {
@@ -61,6 +69,42 @@ describe("POST /api/v1/people", () => {
       new Request("http://localhost/api/v1/people", json({ fullName: "Ana", cpf: "123", birthDate: "1990-05-15" })),
     );
     expect(res.status).toBe(422);
+  });
+});
+
+describe("GET /api/v1/people/by-cpf/:cpf — validation", () => {
+  it("returns 400 for invalid cpf format", async () => {
+    const { app } = setup();
+    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/123"));
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for non-numeric cpf", async () => {
+    const { app } = setup();
+    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/abcdefghijk"));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/v1/people/:personId — UUID validation", () => {
+  it("returns 400 for invalid UUID", async () => {
+    const { app } = setup();
+    const res = await app.handle(new Request("http://localhost/api/v1/people/not-a-uuid"));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("PUT /api/v1/people/:personId — UUID validation", () => {
+  it("returns 400 for invalid UUID", async () => {
+    const { app } = setup();
+    const res = await app.handle(
+      new Request("http://localhost/api/v1/people/not-a-uuid", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fullName: "Ana", birthDate: "1990-05-15" }),
+      }),
+    );
+    expect(res.status).toBe(400);
   });
 });
 
@@ -90,29 +134,30 @@ describe("GET /api/v1/people/by-cpf/:cpf", () => {
   it("returns 200 when cpf exists", async () => {
     const { app } = setup();
     await app.handle(
-      new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", cpf: "12345678901", birthDate: "1990-05-15" })),
+      new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", cpf: "52998224725", birthDate: "1990-05-15" })),
     );
 
-    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/12345678901"));
+    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/52998224725"));
     expect(res.status).toBe(200);
     const body = await parseJson(res);
-    expect(dataAs<PersonData>(body).cpf).toBe("12345678901");
+    expect(dataAs<PersonData>(body).cpf).toBe("52998224725");
   });
 
   it("returns 404 when cpf not found", async () => {
     const { app } = setup();
-    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/99999999999"));
+    const res = await app.handle(new Request("http://localhost/api/v1/people/by-cpf/98765432100"));
     expect(res.status).toBe(404);
   });
 });
 
 describe("PUT /api/v1/people/:personId", () => {
-  it("returns 204 on successful update", async () => {
-    const { app } = setup();
+  it("returns 204 on successful update and publishes personUpdated event", async () => {
+    const { app, publisher } = setup();
     const createRes = await app.handle(
       new Request("http://localhost/api/v1/people", json({ fullName: "Ana Costa", birthDate: "1990-05-15" })),
     );
     const { id } = dataAs<IdData>(await parseJson(createRes));
+    publisher.published.length = 0; // reset after create event
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${id}`, {
@@ -122,6 +167,11 @@ describe("PUT /api/v1/people/:personId", () => {
       }),
     );
     expect(res.status).toBe(204);
+
+    expect(publisher.published.length).toBe(1);
+    expect(publisher.published[0]!.subject).toBe("people.person.updated");
+    const eventData = (publisher.published[0]!.payload as { data: { fullName: string } }).data;
+    expect(eventData.fullName).toBe("Ana Silva");
   });
 
   it("returns 404 for unknown person", async () => {

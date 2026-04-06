@@ -7,6 +7,9 @@ import { validateCreatePerson, validateUpdatePerson } from "../domain/index.ts";
 
 const timestamp = () => new Date().toISOString();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CPF_RE = /^\d{11}$/;
+
 type PeopleRouteDeps = {
   readonly people: PersonRepository;
   readonly guard: AuthGuard;
@@ -77,6 +80,11 @@ export const createPeopleRoutes = ({ people, guard, publisher }: PeopleRouteDeps
       const auth = await guard(headers, ["social_worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
+      if (!CPF_RE.test(params.cpf)) {
+        set.status = 400;
+        return { success: false, error: { code: "PEO-004", message: "cpf must be exactly 11 digits" } };
+      }
+
       const person = await people.findByCpf(params.cpf);
       if (!person) {
         set.status = 404;
@@ -89,6 +97,11 @@ export const createPeopleRoutes = ({ people, guard, publisher }: PeopleRouteDeps
       const auth = await guard(headers, ["social_worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
+      if (!UUID_RE.test(params.personId)) {
+        set.status = 400;
+        return { success: false, error: { code: "PEO-003", message: "personId must be a valid UUID" } };
+      }
+
       const person = await people.findById(params.personId);
       if (!person) {
         set.status = 404;
@@ -100,6 +113,11 @@ export const createPeopleRoutes = ({ people, guard, publisher }: PeopleRouteDeps
     .put("/people/:personId", async ({ params, body, headers, set }) => {
       const auth = await guard(headers, ["social_worker", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
+
+      if (!UUID_RE.test(params.personId)) {
+        set.status = 400;
+        return { success: false, error: { code: "PEO-003", message: "personId must be a valid UUID" } };
+      }
 
       const validation = validateUpdatePerson(body);
       if (validation.kind === "error") {

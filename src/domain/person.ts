@@ -6,8 +6,23 @@ export const toPersonId = (value: string): PersonId => value as PersonId;
 
 declare const CpfBrand: unique symbol;
 export type Cpf = string & { readonly [CpfBrand]: typeof CpfBrand };
+
+const isValidCpfCheckDigits = (digits: string): boolean => {
+  if (/^(\d)\1{10}$/.test(digits)) return false;
+
+  const sum1 = Array.from({ length: 9 }, (_, i) => Number(digits[i]) * (10 - i))
+    .reduce((a, b) => a + b, 0);
+  const d1 = ((sum1 * 10) % 11) % 10;
+  if (d1 !== Number(digits[9])) return false;
+
+  const sum2 = Array.from({ length: 10 }, (_, i) => Number(digits[i]) * (11 - i))
+    .reduce((a, b) => a + b, 0);
+  const d2 = ((sum2 * 10) % 11) % 10;
+  return d2 === Number(digits[10]);
+};
+
 export const toCpf = (value: string): Cpf | null =>
-  /^\d{11}$/.test(value) ? (value as Cpf) : null;
+  /^\d{11}$/.test(value) && isValidCpfCheckDigits(value) ? (value as Cpf) : null;
 
 declare const IsoDateStr: unique symbol;
 export type IsoDateString = string & { readonly [IsoDateStr]: typeof IsoDateStr };
@@ -45,7 +60,7 @@ const fail = (message: string): ValidationResult => ({ kind: "error", message })
 export const validateCreatePerson = (input: CreatePersonInput): ValidationResult => {
   if (!input.fullName || input.fullName.trim().length === 0) return fail("fullName is required");
   if (input.fullName.length > 200) return fail("fullName must be at most 200 characters");
-  if (input.cpf !== undefined && toCpf(input.cpf) === null) return fail("cpf must be exactly 11 digits");
+  if (input.cpf !== undefined && toCpf(input.cpf) === null) return fail("cpf must be exactly 11 digits with valid check digits");
   if (!input.birthDate) return fail("birthDate is required");
   if (toIsoDate(input.birthDate) === null) return fail("birthDate must be YYYY-MM-DD format");
   if (new Date(input.birthDate) > new Date()) return fail("birthDate cannot be in the future");

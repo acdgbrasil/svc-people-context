@@ -30,27 +30,68 @@ type IntrospectionResponse = {
 };
 
 const introspectToken = async (token: string): Promise<readonly string[] | null> => {
-  const { introspectUrl, introspectClientId, introspectClientSecret } = env.auth;
+  const { introspectUrl, introspectClientId, introspectClientSecret, introspectTimeoutMs } = env.auth;
   if (!introspectUrl || !introspectClientId || !introspectClientSecret) return null;
 
   const credentials = btoa(`${introspectClientId}:${introspectClientSecret}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), introspectTimeoutMs);
 
-  const response = await fetch(introspectUrl, {
-    method: "POST",
-    headers: {
-      "Authorization": `Basic ${credentials}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: `token=${encodeURIComponent(token)}`,
-  });
+  try {
+    const response = await fetch(introspectUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${credentials}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: `token=${encodeURIComponent(token)}`,
+      signal: controller.signal,
+    });
 
-  if (!response.ok) return null;
+    if (!response.ok) {
+      console.error(`[jwt] Token introspection failed: HTTP ${response.status}`);
+      return null;
+    }
 
-  const result = await response.json() as IntrospectionResponse;
-  if (!result.active) return null;
+    const result = await response.json() as IntrospectionResponse;
+    if (!result.active) return null;
 
-  const projectRoles = result[ROLE_CLAIM];
-  return projectRoles ? Object.keys(projectRoles) : [];
+    const projectRoles = result[ROLE_CLAIM];
+    return projectRoles ? Object.keys(projectRoles) : [];
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      console.error(`[jwt] Token introspection timed out after ${introspectTimeoutMs}ms`);
+    } else {
+      console.error("[jwt] Token introspection error:", err instanceof Error ? err.message : err);
+    }
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+// ─── JWKS startup validation ───────────────────────────────────
+
+export const validateJwks = async (): Promise<void> => {
+  try {
+    const response = await fetch(env.auth.jwksUrl, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      throw new Error(`JWKS endpoint returned HTTP ${response.status}`);
+    }
+    const body = await response.json() as { keys?: unknown[] };
+    if (!body.keys || !Array.isArray(body.keys) || body.keys.length === 0) {
+      throw new Error("JWKS response contains no keys");
+    }
+    console.log(`[jwt] JWKS validated: ${body.keys.length} key(s) from ${env.auth.jwksUrl}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (env.isProduction) {
+      throw new Error(`[jwt] JWKS validation failed — aborting startup: ${message}`);
+    }
+    console.warn(`[jwt] JWKS validation failed (non-production, continuing): ${message}`);
+  }
 };
 
 // ─── Factory ────────────────────────────────────────────────────
@@ -70,8 +111,6 @@ export const createJwtVerifier = (): JwtVerifier => {
 
       let roles = extractRoles(payload);
 
-      // Fallback: if JWT has no roles, try token introspection
-      // Only for service accounts in the allowlist (prevents escalation)
       if (roles.length === 0 && allowedServiceAccounts.has(sub)) {
         const introspectedRoles = await introspectToken(token);
         if (introspectedRoles) {
@@ -80,7 +119,8 @@ export const createJwtVerifier = (): JwtVerifier => {
       }
 
       return { sub, roles };
-    } catch {
+    } catch (err) {
+      console.error("[jwt] Token verification failed:", err instanceof Error ? err.message : err);
       return null;
     }
   };

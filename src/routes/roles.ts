@@ -8,6 +8,8 @@ import { validateAssignRole } from "../domain/index.ts";
 
 const timestamp = () => new Date().toISOString();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 type RolesRouteDeps = {
   readonly people: PersonRepository;
   readonly roles: RoleRepository;
@@ -20,6 +22,11 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
     .post("/people/:personId/roles", async ({ params, body, headers, set }) => {
       const auth = await guard(headers, ["social_worker", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
+
+      if (!UUID_RE.test(params.personId)) {
+        set.status = 400;
+        return { success: false, error: { code: "PEO-003", message: "personId must be a valid UUID" } };
+      }
 
       const validation = validateAssignRole(body);
       if (validation.kind === "error") {
@@ -58,6 +65,11 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
       const auth = await guard(headers, ["social_worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
+      if (!UUID_RE.test(params.personId)) {
+        set.status = 400;
+        return { success: false, error: { code: "PEO-003", message: "personId must be a valid UUID" } };
+      }
+
       const person = await people.findById(params.personId);
       if (!person) {
         set.status = 404;
@@ -73,20 +85,22 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
       const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
-      const role = (await roles.listByPerson(params.personId)).find((r) => r.id === params.roleId);
-      const ok = await roles.deactivate(params.personId, params.roleId);
-      if (!ok) {
+      if (!UUID_RE.test(params.personId) || !UUID_RE.test(params.roleId)) {
+        set.status = 400;
+        return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
+      }
+
+      const deactivated = await roles.deactivate(params.personId, params.roleId);
+      if (!deactivated) {
         set.status = 404;
         return { success: false, error: { code: "ROL-002", message: "Active role not found" } };
       }
 
-      if (role) {
-        await publisher.publish(events.roleDeactivated(auth.actorId, {
-          personId: params.personId,
-          system: role.system,
-          role: role.role,
-        }));
-      }
+      await publisher.publish(events.roleDeactivated(auth.actorId, {
+        personId: params.personId,
+        system: deactivated.system,
+        role: deactivated.role,
+      }));
 
       set.status = 204;
     })
@@ -95,20 +109,22 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
       const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
-      const role = (await roles.listByPerson(params.personId)).find((r) => r.id === params.roleId);
-      const ok = await roles.reactivate(params.personId, params.roleId);
-      if (!ok) {
+      if (!UUID_RE.test(params.personId) || !UUID_RE.test(params.roleId)) {
+        set.status = 400;
+        return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
+      }
+
+      const reactivated = await roles.reactivate(params.personId, params.roleId);
+      if (!reactivated) {
         set.status = 404;
         return { success: false, error: { code: "ROL-003", message: "Inactive role not found" } };
       }
 
-      if (role) {
-        await publisher.publish(events.roleReactivated(auth.actorId, {
-          personId: params.personId,
-          system: role.system,
-          role: role.role,
-        }));
-      }
+      await publisher.publish(events.roleReactivated(auth.actorId, {
+        personId: params.personId,
+        system: reactivated.system,
+        role: reactivated.role,
+      }));
 
       set.status = 204;
     })

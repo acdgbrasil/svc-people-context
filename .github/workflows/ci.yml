@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   validate:
-    name: Typecheck and tests
+    name: Typecheck, tests, and coverage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -31,5 +31,5 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Run tests
-        run: bun test
+      - name: Run tests with coverage
+        run: bun run coverage

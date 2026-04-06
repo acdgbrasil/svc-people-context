@@ -92,7 +92,7 @@ src/
 ├── repository/   # PostgreSQL queries (functional, injected sql)
 ├── routes/       # Elysia route handlers (thin, delegate to repository)
 ├── middleware/    # Auth (JWT/JWKS), error handling
-├── events/       # NATS event publishing (Transactional Outbox)
+├── events/       # Transactional Outbox (publisher.ts) + NATS relay (outbox-relay.ts)
 └── index.ts      # App bootstrap
 ```
 
@@ -111,7 +111,7 @@ src/
 
 - **Dedicated PostgreSQL**: `people` database, separate from all other services.
 - **Naming**: Tables lowercase with underscores (`people`, `system_roles`).
-- **Migrations**: Run on startup via `migrate()` in `repository/db.ts`. Idempotent (`CREATE TABLE IF NOT EXISTS`).
+- **Migrations**: Versioned, sequential migrations in `repository/migrations.ts`. Tracked in `schema_migrations` table. Each migration runs in a transaction.
 - **Connection pool**: Max 10 connections via `postgres.js`.
 
 ## Conventions
@@ -133,6 +133,7 @@ API contracts defined in `contracts/services/people/` (separate repo):
 ## Testing
 
 - Framework: `bun test` (built-in, Jest-compatible API)
-- Coverage target: ≥95%
+- Coverage target: ≥95% line coverage (enforced in CI via `bun run coverage`)
 - Test files: `tests/**/*.test.ts`
 - Pattern: pure functions → easy to test without mocks
+- Coverage gate script: `scripts/check-coverage.js`

@@ -100,16 +100,18 @@ export const createFakeRoleRepository = (): RoleRepository & { readonly _store: 
 
     deactivate: async (personId, roleId) => {
       const role = store.get(roleId);
-      if (!role || role.personId !== personId || !role.active) return false;
-      store.set(roleId, { ...role, active: false });
-      return true;
+      if (!role || role.personId !== personId || !role.active) return null;
+      const deactivated = { ...role, active: false };
+      store.set(roleId, deactivated);
+      return deactivated;
     },
 
     reactivate: async (personId, roleId) => {
       const role = store.get(roleId);
-      if (!role || role.personId !== personId || role.active) return false;
-      store.set(roleId, { ...role, active: true });
-      return true;
+      if (!role || role.personId !== personId || role.active) return null;
+      const reactivated = { ...role, active: true };
+      store.set(roleId, reactivated);
+      return reactivated;
     },
 
     query: async (system, role, active = true) => {

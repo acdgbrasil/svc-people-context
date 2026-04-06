@@ -31,10 +31,47 @@ const createPerson = async (app: ReturnType<typeof setup>["app"]) => {
   return dataAs<IdData>(await parseJson(res)).id;
 };
 
-describe("POST /api/v1/people/:personId/roles", () => {
-  it("assigns a role and returns 201", async () => {
+describe("POST /api/v1/people/:personId/roles — UUID validation", () => {
+  it("returns 400 for invalid personId UUID", async () => {
     const { app } = setup();
+    const res = await app.handle(
+      new Request("http://localhost/api/v1/people/not-a-uuid/roles", json({ system: "social-care", role: "patient" })),
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/v1/people/:personId/roles — UUID validation", () => {
+  it("returns 400 for invalid personId UUID", async () => {
+    const { app } = setup();
+    const res = await app.handle(new Request("http://localhost/api/v1/people/not-a-uuid/roles"));
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("PUT deactivate/reactivate — UUID validation", () => {
+  it("returns 400 for invalid UUIDs on deactivate", async () => {
+    const { app } = setup();
+    const res = await app.handle(
+      new Request("http://localhost/api/v1/people/not-a-uuid/roles/also-bad/deactivate", { method: "PUT" }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 for invalid UUIDs on reactivate", async () => {
+    const { app } = setup();
+    const res = await app.handle(
+      new Request("http://localhost/api/v1/people/not-a-uuid/roles/also-bad/reactivate", { method: "PUT" }),
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /api/v1/people/:personId/roles", () => {
+  it("assigns a role and returns 201 with roleAssigned event", async () => {
+    const { app, publisher } = setup();
     const personId = await createPerson(app);
+    publisher.published.length = 0; // reset after person creation
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "patient" })),
@@ -42,20 +79,29 @@ describe("POST /api/v1/people/:personId/roles", () => {
     expect(res.status).toBe(201);
     const body = await parseJson(res);
     expect(dataAs<IdData>(body).id).toBeDefined();
+
+    expect(publisher.published.length).toBe(1);
+    expect(publisher.published[0]!.subject).toBe("people.role.assigned");
+    const eventData = (publisher.published[0]!.payload as { data: { system: string; role: string } }).data;
+    expect(eventData.system).toBe("social-care");
+    expect(eventData.role).toBe("patient");
   });
 
-  it("returns 204 when role already exists and is active (idempotent)", async () => {
-    const { app } = setup();
+  it("returns 204 when role already exists and is active (idempotent, no event)", async () => {
+    const { app, publisher } = setup();
     const personId = await createPerson(app);
 
     await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "patient" })),
     );
+    const countBefore = publisher.published.length;
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "patient" })),
     );
     expect(res.status).toBe(204);
+    // No new event on idempotent call
+    expect(publisher.published.length).toBe(countBefore);
   });
 
   it("returns 404 for unknown person", async () => {
@@ -102,19 +148,26 @@ describe("GET /api/v1/people/:personId/roles", () => {
 });
 
 describe("PUT /api/v1/people/:personId/roles/:roleId/deactivate", () => {
-  it("deactivates a role and returns 204", async () => {
-    const { app } = setup();
+  it("deactivates a role, returns 204, and publishes roleDeactivated event", async () => {
+    const { app, publisher } = setup();
     const personId = await createPerson(app);
 
     const assignRes = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "patient" })),
     );
     const roleId = dataAs<IdData>(await parseJson(assignRes)).id;
+    publisher.published.length = 0;
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
     );
     expect(res.status).toBe(204);
+
+    expect(publisher.published.length).toBe(1);
+    expect(publisher.published[0]!.subject).toBe("people.role.deactivated");
+    const eventData = (publisher.published[0]!.payload as { data: { system: string; role: string } }).data;
+    expect(eventData.system).toBe("social-care");
+    expect(eventData.role).toBe("patient");
   });
 
   it("returns 404 for unknown role", async () => {
@@ -128,8 +181,8 @@ describe("PUT /api/v1/people/:personId/roles/:roleId/deactivate", () => {
 });
 
 describe("PUT /api/v1/people/:personId/roles/:roleId/reactivate", () => {
-  it("reactivates a deactivated role", async () => {
-    const { app } = setup();
+  it("reactivates a deactivated role and publishes roleReactivated event", async () => {
+    const { app, publisher } = setup();
     const personId = await createPerson(app);
 
     const assignRes = await app.handle(
@@ -140,11 +193,18 @@ describe("PUT /api/v1/people/:personId/roles/:roleId/reactivate", () => {
     await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
     );
+    publisher.published.length = 0;
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/reactivate`, { method: "PUT" }),
     );
     expect(res.status).toBe(204);
+
+    expect(publisher.published.length).toBe(1);
+    expect(publisher.published[0]!.subject).toBe("people.role.reactivated");
+    const eventData = (publisher.published[0]!.payload as { data: { system: string; role: string } }).data;
+    expect(eventData.system).toBe("social-care");
+    expect(eventData.role).toBe("patient");
   });
 
   it("returns 404 when role is already active", async () => {

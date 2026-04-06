@@ -8,6 +8,8 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "test": "bun test",
+    "test:coverage": "bun test --coverage",
+    "coverage": "bun test --coverage 2>&1 | tee /dev/stderr | node scripts/check-coverage.js",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

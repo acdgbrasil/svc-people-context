@@ -67,17 +67,20 @@ export const createPersonRepository = (sql: Sql): PersonRepository => ({
   list: async (options = {}) => {
     const limit = Math.min(options.limit ?? 20, 100);
     const search = options.search?.trim();
+    const hasSearch = !!search;
+    const hasCursor = !!options.cursor;
 
     const [countRow] = await sql<[{ count: string }]>`
       SELECT count(*)::text AS count FROM people
-      ${search ? sql`WHERE full_name ILIKE ${"%" + search + "%"} OR cpf LIKE ${search + "%"}` : sql``}
+      ${hasSearch ? sql`WHERE (full_name ILIKE ${"%" + search + "%"} OR cpf LIKE ${search + "%"})` : sql``}
     `;
     const totalCount = Number(countRow!.count);
 
     const rows = await sql<Person[]>`
       SELECT ${sql.unsafe(SELECT_FIELDS)} FROM people
-      ${search ? sql`WHERE full_name ILIKE ${"%" + search + "%"} OR cpf LIKE ${search + "%"}` : sql``}
-      ${options.cursor ? sql`AND id > ${options.cursor}` : sql``}
+      WHERE true
+      ${hasSearch ? sql`AND (full_name ILIKE ${"%" + search + "%"} OR cpf LIKE ${search + "%"})` : sql``}
+      ${hasCursor ? sql`AND id > ${options.cursor!}` : sql``}
       ORDER BY id
       LIMIT ${limit + 1}
     `;

@@ -1,9 +1,8 @@
-import { connect, StringCodec } from "nats";
-import { env } from "../config/env.ts";
+import type { Sql } from "postgres";
 
 // ─── Types ──────────────────────────────────────────────────────
 
-type DomainEvent = {
+export type DomainEvent = {
   readonly subject: string;
   readonly payload: {
     readonly metadata: {
@@ -21,41 +20,24 @@ export type EventPublisher = {
   readonly close: () => Promise<void>;
 };
 
-// ─── NATS publisher ─────────────────────────────────────────────
+// ─── Outbox publisher (writes to DB, relay publishes to NATS) ──
 
-const sc = StringCodec();
-
-const createNatsPublisher = async (url: string): Promise<EventPublisher> => {
-  const nc = await connect({ servers: url });
-  console.log(`NATS connected: ${url}`);
-
-  return {
-    publish: async (event) => {
-      const data = JSON.stringify(event.payload);
-      nc.publish(event.subject, sc.encode(data));
-    },
-    close: async () => {
-      await nc.drain();
-    },
-  };
-};
-
-// ─── Noop publisher (when NATS_URL not set) ─────────────────────
-
-const createNoopPublisher = (): EventPublisher => ({
-  publish: async () => {},
+export const createOutboxPublisher = (sql: Sql): EventPublisher => ({
+  publish: async (event) => {
+    await sql`
+      INSERT INTO outbox_events (subject, payload)
+      VALUES (${event.subject}, ${JSON.stringify(event.payload)})
+    `;
+  },
   close: async () => {},
 });
 
-// ─── Factory (conditional based on env) ─────────────────────────
+// ─── Noop publisher (when DB not available, e.g. in tests) ─────
 
-export const createEventPublisher = async (): Promise<EventPublisher> => {
-  if (!env.nats.url) {
-    console.log("NATS_URL not set — event publishing disabled");
-    return createNoopPublisher();
-  }
-  return createNatsPublisher(env.nats.url);
-};
+export const createNoopPublisher = (): EventPublisher => ({
+  publish: async () => {},
+  close: async () => {},
+});
 
 // ─── Event builders ─────────────────────────────────────────────
 

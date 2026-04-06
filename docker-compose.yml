@@ -15,20 +15,41 @@ services:
       timeout: 3s
       retries: 5
 
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--store_dir=/data"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    healthcheck:
+      test: ["CMD", "nats-server", "--signal", "ldm"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   app:
     build: .
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
+      SERVER_HOST: 0.0.0.0
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: people
+      JWKS_URL: https://auth.acdgbrasil.com.br/oauth/v2/keys
+      ZITADEL_ISSUER: https://auth.acdgbrasil.com.br
+      NATS_URL: nats://nats:4222
     depends_on:
       postgres:
+        condition: service_healthy
+      nats:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  nats_data:
