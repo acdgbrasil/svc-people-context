@@ -1,0 +1,47 @@
+version: '1.2'
+
+summary:
+  generatePRSummary: true
+  customInstructions: >
+    Summarize changes by layer (domain, repository, routes, events, middleware).
+    Highlight security changes, new endpoints, schema migrations, and NATS events.
+  behaviourForExistingDescription: concatenate
+
+ignorePaths:
+  - node_modules/
+  - bun.lockb
+  - .env
+  - .env.*
+  - coverage/
+  - dist/
+  - handbook/
+
+baseBranches: []
+
+reviewOptions:
+  security: true
+  code_style: true
+  kody_rules: true
+  refactoring: true
+  error_handling: true
+  maintainability: true
+  potential_issues: true
+  documentation_and_comments: false
+  performance_and_optimization: true
+  business_logic: true
+
+suggestionControl:
+  groupingMode: full
+  limitationType: pr
+  maxSuggestions: 9
+  severityLevelFilter: medium
+
+ignoredTitleKeywords:
+  - chore
+  - docs
+  - ci
+
+automatedReviewActive: true
+pullRequestApprovalActive: false
+isRequestChangesActive: false
+llmGeneratedMemoriesRequireApproval: false
