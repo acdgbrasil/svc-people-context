@@ -34,6 +34,14 @@ jobs:
       - name: Run tests with coverage
         run: bun run coverage
 
+  sbom:
+    name: SBOM
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: validate
+    uses: acdgbrasil/.github/.github/workflows/reusable-sbom.yml@main
+    permissions:
+      contents: write
+
   kodus-review:
     name: Kodus AI Review
     if: github.event_name == 'pull_request'
