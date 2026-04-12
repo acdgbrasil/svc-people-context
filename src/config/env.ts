@@ -33,6 +33,7 @@ export const env = {
       .map((s) => s.trim())
       .filter(Boolean) ?? [],
     introspectTimeoutMs: Number(process.env["INTROSPECT_TIMEOUT_MS"] ?? 5000),
+    projectId: process.env["ZITADEL_PROJECT_ID"] ?? "",
   },
 
   nats: {

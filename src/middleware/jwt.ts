@@ -14,19 +14,37 @@ export type JwtVerifier = (token: string) => Promise<AuthContext | null>;
 
 // ─── Role claim extraction ──────────────────────────────────────
 
-const ROLE_CLAIM = "urn:zitadel:iam:org:project:roles";
+const ROLE_CLAIM = env.auth.projectId
+  ? `urn:zitadel:iam:org:project:${env.auth.projectId}:roles`
+  : "urn:zitadel:iam:org:project:roles";
+
+const ROLE_CLAIM_PATTERN = /^urn:zitadel:iam:org:project:(?:\d+:)?roles$/;
 
 const extractRoles = (payload: JWTPayload): readonly string[] => {
-  const rolesObj = payload[ROLE_CLAIM] as ZitadelRoles | undefined;
+  // Try exact key first, then pattern match as fallback
+  const claimKey = (ROLE_CLAIM in payload)
+    ? ROLE_CLAIM
+    : Object.keys(payload).find((k) => ROLE_CLAIM_PATTERN.test(k));
+  if (!claimKey) return [];
+  const rolesObj = payload[claimKey] as ZitadelRoles | undefined;
   if (!rolesObj || typeof rolesObj !== "object") return [];
   return Object.keys(rolesObj);
 };
 
 // ─── Token introspection (RFC 7662) — fallback for service accounts ─
 
-type IntrospectionResponse = {
+type IntrospectionResponse = Readonly<Record<string, unknown>> & {
   readonly active: boolean;
-  readonly "urn:zitadel:iam:org:project:roles"?: ZitadelRoles;
+};
+
+const extractIntrospectionRoles = (result: IntrospectionResponse): readonly string[] => {
+  const claimKey = (ROLE_CLAIM in result)
+    ? ROLE_CLAIM
+    : Object.keys(result).find((k) => ROLE_CLAIM_PATTERN.test(k));
+  if (!claimKey) return [];
+  const rolesObj = result[claimKey] as ZitadelRoles | undefined;
+  if (!rolesObj || typeof rolesObj !== "object") return [];
+  return Object.keys(rolesObj);
 };
 
 const introspectToken = async (token: string): Promise<readonly string[] | null> => {
@@ -56,8 +74,7 @@ const introspectToken = async (token: string): Promise<readonly string[] | null>
     const result = await response.json() as IntrospectionResponse;
     if (!result.active) return null;
 
-    const projectRoles = result[ROLE_CLAIM];
-    return projectRoles ? Object.keys(projectRoles) : [];
+    return extractIntrospectionRoles(result);
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
       console.error(`[jwt] Token introspection timed out after ${introspectTimeoutMs}ms`);
