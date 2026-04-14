@@ -69,4 +69,16 @@ export const events = {
 
   roleReactivated: (actorId: string, data: { personId: string; system: string; role: string }) =>
     buildEvent("people.role.reactivated", actorId, data),
+
+  userProvisioned: (actorId: string, data: { personId: string; zitadelUserId: string; email: string }) =>
+    buildEvent("people.user.provisioned", actorId, data),
+
+  userDeactivated: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
+    buildEvent("people.user.deactivated", actorId, data),
+
+  userReactivated: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
+    buildEvent("people.user.reactivated", actorId, data),
+
+  passwordResetRequested: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
+    buildEvent("people.user.password_reset_requested", actorId, data),
 } as const;

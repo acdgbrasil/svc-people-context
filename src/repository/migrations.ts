@@ -68,6 +68,17 @@ const migrations: readonly Migration[] = [
       await sql`CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox_events(created_at) WHERE published = false`;
     },
   },
+  {
+    version: 4,
+    name: "add_zitadel_user_columns",
+    up: async (sql) => {
+      await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS email TEXT`;
+      await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS zitadel_user_id TEXT UNIQUE`;
+      await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT true`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_people_zitadel ON people(zitadel_user_id) WHERE zitadel_user_id IS NOT NULL`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_people_email ON people(email) WHERE email IS NOT NULL`;
+    },
+  },
 ];
 
 // ─── Migration runner ──────────────────────────────────────────

@@ -7,6 +7,7 @@ import { createJwtVerifier, validateJwks } from "./middleware/jwt.ts";
 import { createAuthGuard } from "./middleware/auth.ts";
 import { createOutboxPublisher } from "./events/publisher.ts";
 import { createOutboxRelay, createNoopRelay } from "./events/outbox-relay.ts";
+import { createZitadelClient, createNoopZitadelClient } from "./zitadel/index.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createPeopleRoutes } from "./routes/people.ts";
 import { createRolesRoutes } from "./routes/roles.ts";
@@ -22,6 +23,17 @@ const roles = createRoleRepository(sql);
 const guard = createAuthGuard(createJwtVerifier());
 const publisher = createOutboxPublisher(sql);
 
+const zitadel = env.zitadel.managementUrl && env.zitadel.serviceAccountToken
+  ? createZitadelClient({
+      baseUrl: env.zitadel.managementUrl,
+      token: env.zitadel.serviceAccountToken,
+    })
+  : createNoopZitadelClient();
+
+if (!env.zitadel.managementUrl) {
+  console.log("[zitadel] ZITADEL_MANAGEMENT_URL not set — user provisioning disabled");
+}
+
 const relay = env.nats.url
   ? await createOutboxRelay(sql, env.nats.url)
   : createNoopRelay();
@@ -29,8 +41,8 @@ relay.start();
 
 const app = new Elysia()
   .use(createHealthRoutes({ sql, relay }))
-  .use(createPeopleRoutes({ people, guard, publisher }))
-  .use(createRolesRoutes({ people, roles, guard, publisher }))
+  .use(createPeopleRoutes({ people, guard, publisher, zitadel }))
+  .use(createRolesRoutes({ people, roles, guard, publisher, zitadel }))
   .listen({ port: env.port, hostname: env.host });
 
 console.log(`people-context running on ${app.server?.hostname}:${app.server?.port}`);

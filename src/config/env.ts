@@ -39,4 +39,10 @@ export const env = {
   nats: {
     url: process.env["NATS_URL"],
   },
+
+  zitadel: {
+    managementUrl: process.env["ZITADEL_MANAGEMENT_URL"],
+    serviceAccountToken: process.env["ZITADEL_SERVICE_ACCOUNT_TOKEN"],
+    projectId: process.env["ZITADEL_PROJECT_ID"] ?? "",
+  },
 } as const;

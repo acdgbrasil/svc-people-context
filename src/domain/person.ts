@@ -36,6 +36,9 @@ export type Person = {
   readonly fullName: string;
   readonly cpf: string | null;
   readonly birthDate: string;
+  readonly email: string | null;
+  readonly zitadelUserId: string | null;
+  readonly active: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -44,6 +47,9 @@ export type CreatePersonInput = {
   readonly fullName: string;
   readonly cpf?: string;
   readonly birthDate: string;
+  readonly email?: string;
+  readonly createLogin?: boolean;
+  readonly initialPassword?: string;
 };
 
 export type UpdatePersonInput = CreatePersonInput;
@@ -57,6 +63,8 @@ export type ValidationResult =
 const ok = { kind: "ok" } as const satisfies ValidationResult;
 const fail = (message: string): ValidationResult => ({ kind: "error", message });
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const validateCreatePerson = (input: CreatePersonInput): ValidationResult => {
   if (!input.fullName || input.fullName.trim().length === 0) return fail("fullName is required");
   if (input.fullName.length > 200) return fail("fullName must be at most 200 characters");
@@ -64,6 +72,8 @@ export const validateCreatePerson = (input: CreatePersonInput): ValidationResult
   if (!input.birthDate) return fail("birthDate is required");
   if (toIsoDate(input.birthDate) === null) return fail("birthDate must be YYYY-MM-DD format");
   if (new Date(input.birthDate) > new Date()) return fail("birthDate cannot be in the future");
+  if (input.email !== undefined && !EMAIL_RE.test(input.email)) return fail("email must be a valid email address");
+  if (input.createLogin && !input.email) return fail("email is required when createLogin is true");
   return ok;
 };
 

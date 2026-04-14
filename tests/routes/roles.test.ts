@@ -5,6 +5,7 @@ import { createRolesRoutes } from "../../src/routes/roles.ts";
 import { createFakePersonRepository, createFakeRoleRepository } from "./fake-repositories.ts";
 import { createFakeAuthGuard } from "./fake-auth.ts";
 import { createFakePublisher } from "./fake-publisher.ts";
+import { createNoopZitadelClient } from "../../src/zitadel/index.ts";
 import { parseJson, dataAs, dataAsArray, type IdData, type RoleData } from "./test-types.ts";
 
 const setup = () => {
@@ -12,9 +13,10 @@ const setup = () => {
   const roles = createFakeRoleRepository();
   const guard = createFakeAuthGuard();
   const publisher = createFakePublisher();
+  const zitadel = createNoopZitadelClient();
   const app = new Elysia()
-    .use(createPeopleRoutes({ people, guard, publisher }))
-    .use(createRolesRoutes({ people, roles, guard, publisher }));
+    .use(createPeopleRoutes({ people, guard, publisher, zitadel }))
+    .use(createRolesRoutes({ people, roles, guard, publisher, zitadel }));
   return { app, people, roles, publisher };
 };
 

@@ -4,13 +4,15 @@ import { createPeopleRoutes } from "../../src/routes/people.ts";
 import { createFakePersonRepository } from "./fake-repositories.ts";
 import { createFakeAuthGuard } from "./fake-auth.ts";
 import { createFakePublisher } from "./fake-publisher.ts";
+import { createNoopZitadelClient } from "../../src/zitadel/index.ts";
 import { parseJson, dataAs, dataAsArray, type IdData, type PersonData } from "./test-types.ts";
 
 const setup = () => {
   const people = createFakePersonRepository();
   const guard = createFakeAuthGuard();
   const publisher = createFakePublisher();
-  const app = new Elysia().use(createPeopleRoutes({ people, guard, publisher }));
+  const zitadel = createNoopZitadelClient();
+  const app = new Elysia().use(createPeopleRoutes({ people, guard, publisher, zitadel }));
   return { app, people, publisher };
 };
 

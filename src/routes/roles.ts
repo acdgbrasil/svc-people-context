@@ -3,8 +3,10 @@ import type { PersonRepository } from "../repository/person-repository.ts";
 import type { RoleRepository } from "../repository/role-repository.ts";
 import type { AuthGuard } from "../middleware/auth.ts";
 import type { EventPublisher } from "../events/publisher.ts";
+import type { ZitadelClient } from "../zitadel/index.ts";
 import { events } from "../events/publisher.ts";
 import { validateAssignRole } from "../domain/index.ts";
+import { env } from "../config/env.ts";
 
 const timestamp = () => new Date().toISOString();
 
@@ -15,9 +17,10 @@ type RolesRouteDeps = {
   readonly roles: RoleRepository;
   readonly guard: AuthGuard;
   readonly publisher: EventPublisher;
+  readonly zitadel: ZitadelClient;
 };
 
-export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRouteDeps) =>
+export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: RolesRouteDeps) =>
   new Elysia({ prefix: "/api/v1" })
     .post("/people/:personId/roles", async ({ params, body, headers, set }) => {
       const auth = await guard(headers, ["social_worker", "admin"]);
@@ -51,6 +54,15 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
         system: body.system,
         role: body.role,
       }));
+
+      // Sync role to Zitadel if person has a login
+      if (person.zitadelUserId && env.zitadel.projectId) {
+        await zitadel.addUserGrant({
+          userId: person.zitadelUserId,
+          projectId: env.zitadel.projectId,
+          roleKeys: [`${body.system}:${body.role}`],
+        });
+      }
 
       set.status = 201;
       return { data: { id: role.id }, meta: { timestamp: timestamp() } };
@@ -90,6 +102,8 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
         return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
       }
 
+      const person = await people.findById(params.personId);
+
       const deactivated = await roles.deactivate(params.personId, params.roleId);
       if (!deactivated) {
         set.status = 404;
@@ -101,6 +115,18 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
         system: deactivated.system,
         role: deactivated.role,
       }));
+
+      // Remove matching grant from Zitadel
+      if (person?.zitadelUserId && env.zitadel.projectId) {
+        const grantsResult = await zitadel.listUserGrants(person.zitadelUserId, env.zitadel.projectId);
+        if (grantsResult.ok) {
+          const roleKey = `${deactivated.system}:${deactivated.role}`;
+          const grant = grantsResult.data.result.find((g) => g.roleKeys.includes(roleKey));
+          if (grant) {
+            await zitadel.removeUserGrant(person.zitadelUserId, grant.id);
+          }
+        }
+      }
 
       set.status = 204;
     })
@@ -114,6 +140,8 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
         return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
       }
 
+      const person = await people.findById(params.personId);
+
       const reactivated = await roles.reactivate(params.personId, params.roleId);
       if (!reactivated) {
         set.status = 404;
@@ -125,6 +153,15 @@ export const createRolesRoutes = ({ people, roles, guard, publisher }: RolesRout
         system: reactivated.system,
         role: reactivated.role,
       }));
+
+      // Re-add grant in Zitadel
+      if (person?.zitadelUserId && env.zitadel.projectId) {
+        await zitadel.addUserGrant({
+          userId: person.zitadelUserId,
+          projectId: env.zitadel.projectId,
+          roleKeys: [`${reactivated.system}:${reactivated.role}`],
+        });
+      }
 
       set.status = 204;
     })

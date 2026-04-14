@@ -20,18 +20,22 @@ export type PersonRepository = {
   readonly findByCpf: (cpf: string) => Promise<Person | null>;
   readonly update: (id: string, input: UpdatePersonInput) => Promise<Person | null>;
   readonly list: (options?: ListOptions) => Promise<ListResult>;
+  readonly setZitadelUserId: (id: string, zitadelUserId: string, email: string) => Promise<Person | null>;
+  readonly deactivate: (id: string) => Promise<Person | null>;
+  readonly reactivate: (id: string) => Promise<Person | null>;
 }
 
 const SELECT_FIELDS = `
   id, full_name AS "fullName", cpf, birth_date::text AS "birthDate",
+  email, zitadel_user_id AS "zitadelUserId", active,
   created_at::text AS "createdAt", updated_at::text AS "updatedAt"
 `;
 
 export const createPersonRepository = (sql: Sql): PersonRepository => ({
   create: async (input) => {
     const [row] = await sql<Person[]>`
-      INSERT INTO people (full_name, cpf, birth_date)
-      VALUES (${input.fullName}, ${input.cpf ?? null}, ${input.birthDate})
+      INSERT INTO people (full_name, cpf, birth_date, email)
+      VALUES (${input.fullName}, ${input.cpf ?? null}, ${input.birthDate}, ${input.email ?? null})
       RETURNING ${sql.unsafe(SELECT_FIELDS)}
     `;
     return row!;
@@ -59,6 +63,34 @@ export const createPersonRepository = (sql: Sql): PersonRepository => ({
           birth_date = ${input.birthDate},
           updated_at = now()
       WHERE id = ${id}
+      RETURNING ${sql.unsafe(SELECT_FIELDS)}
+    `;
+    return row ?? null;
+  },
+
+  setZitadelUserId: async (id, zitadelUserId, email) => {
+    const [row] = await sql<Person[]>`
+      UPDATE people
+      SET zitadel_user_id = ${zitadelUserId}, email = ${email}, updated_at = now()
+      WHERE id = ${id}
+      RETURNING ${sql.unsafe(SELECT_FIELDS)}
+    `;
+    return row ?? null;
+  },
+
+  deactivate: async (id) => {
+    const [row] = await sql<Person[]>`
+      UPDATE people SET active = false, updated_at = now()
+      WHERE id = ${id} AND active = true
+      RETURNING ${sql.unsafe(SELECT_FIELDS)}
+    `;
+    return row ?? null;
+  },
+
+  reactivate: async (id) => {
+    const [row] = await sql<Person[]>`
+      UPDATE people SET active = true, updated_at = now()
+      WHERE id = ${id} AND active = false
       RETURNING ${sql.unsafe(SELECT_FIELDS)}
     `;
     return row ?? null;
