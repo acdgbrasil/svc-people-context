@@ -8,6 +8,18 @@ export const createFakeAuthGuard = (): AuthGuard =>
     actorId: "test-actor",
   });
 
+// Guard with configurable roles and sub — for testing RBAC rules
+export const createFakeAuthGuardWithRoles = (
+  roles: string[],
+  sub = "test-user",
+  actorId = "test-actor",
+): AuthGuard =>
+  async (): Promise<AuthResult> => ({
+    kind: "ok",
+    auth: { sub, roles },
+    actorId,
+  });
+
 // Guard that always rejects — for testing 401
 export const createRejectingAuthGuard = (): AuthGuard =>
   async (): Promise<AuthResult> => ({

@@ -12,6 +12,15 @@ const timestamp = () => new Date().toISOString();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const isSuperAdmin = (roles: readonly string[]): boolean =>
+  roles.some((r) => r === "superadmin");
+
+// Extracts systems where the caller has "admin" — e.g. ["social-care:admin"] → ["social-care"]
+const adminSystems = (roles: readonly string[]): readonly string[] =>
+  roles
+    .filter((r) => r.endsWith(":admin"))
+    .map((r) => r.slice(0, r.lastIndexOf(":")));
+
 type RolesRouteDeps = {
   readonly people: PersonRepository;
   readonly roles: RoleRepository;
@@ -23,7 +32,7 @@ type RolesRouteDeps = {
 export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: RolesRouteDeps) =>
   new Elysia({ prefix: "/api/v1" })
     .post("/people/:personId/roles", async ({ params, body, headers, set }) => {
-      const auth = await guard(headers, ["social_worker", "admin"]);
+      const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       if (!UUID_RE.test(params.personId)) {
@@ -37,10 +46,40 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         return { success: false, error: { code: "ROL-001", message: validation.message } };
       }
 
+      const callerRoles = auth.auth.roles;
+      const callerIsSuperAdmin = isSuperAdmin(callerRoles);
+
+      // Rule 1: only superadmin can assign "superadmin"
+      if (body.role === "superadmin" && !callerIsSuperAdmin) {
+        set.status = 403;
+        return { success: false, error: { code: "ROL-006", message: "Only superadmin can assign superadmin role" } };
+      }
+
+      // Rule 2: admin can only assign roles within their own system(s)
+      if (!callerIsSuperAdmin) {
+        const allowed = adminSystems(callerRoles);
+        if (!allowed.includes(body.system)) {
+          set.status = 403;
+          return { success: false, error: { code: "ROL-007", message: `Not authorized to assign roles in system '${body.system}'` } };
+        }
+      }
+
+      // Rule 3: cannot assign roles to yourself (except superadmin)
+      if (!callerIsSuperAdmin && auth.auth.sub === auth.actorId) {
+        // actorId is the person performing the action — if it matches the JWT sub,
+        // we also need to check if the target personId belongs to the caller
+      }
+
       const person = await people.findById(params.personId);
       if (!person) {
         set.status = 404;
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
+      }
+
+      // Rule 3 (continued): prevent self-assignment by matching zitadelUserId
+      if (!callerIsSuperAdmin && person.zitadelUserId === auth.auth.sub) {
+        set.status = 403;
+        return { success: false, error: { code: "ROL-008", message: "Cannot assign roles to yourself" } };
       }
 
       const { role, created } = await roles.assign(params.personId, body);
@@ -74,7 +113,7 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
     })
 
     .get("/people/:personId/roles", async ({ headers, params, query, set }) => {
-      const auth = await guard(headers, ["social_worker", "owner", "admin"]);
+      const auth = await guard(headers, ["worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       if (!UUID_RE.test(params.personId)) {
@@ -108,6 +147,13 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
       if (!deactivated) {
         set.status = 404;
         return { success: false, error: { code: "ROL-002", message: "Active role not found" } };
+      }
+
+      // System-scoped authorization: admin can only deactivate roles in their own system(s)
+      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(deactivated.system)) {
+        await roles.reactivate(params.personId, params.roleId); // rollback
+        set.status = 403;
+        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${deactivated.system}'` } };
       }
 
       await publisher.publish(events.roleDeactivated(auth.actorId, {
@@ -148,6 +194,13 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         return { success: false, error: { code: "ROL-003", message: "Inactive role not found" } };
       }
 
+      // System-scoped authorization: admin can only reactivate roles in their own system(s)
+      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(reactivated.system)) {
+        await roles.deactivate(params.personId, params.roleId); // rollback
+        set.status = 403;
+        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${reactivated.system}'` } };
+      }
+
       await publisher.publish(events.roleReactivated(auth.actorId, {
         personId: params.personId,
         system: reactivated.system,
@@ -167,7 +220,7 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
     })
 
     .get("/roles", async ({ headers, query, set }) => {
-      const auth = await guard(headers, ["social_worker", "owner", "admin"]);
+      const auth = await guard(headers, ["worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       const system = query["system"];

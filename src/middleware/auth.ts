@@ -38,13 +38,21 @@ export const createAuthGuard = (verify: JwtVerifier): AuthGuard =>
     }
 
     if (requiredRoles && requiredRoles.length > 0) {
-      const hasRole = requiredRoles.some((r) => auth.roles.includes(r));
-      if (!hasRole) {
-        return {
-          kind: "forbidden",
-          status: 403,
-          response: { success: false, error: { code: "AUTH-002", message: `Requires role: ${requiredRoles.join(" or ")}` } },
-        };
+      // "superadmin" bypasses all role checks
+      const isSuperAdmin = auth.roles.some((r) => r === "superadmin");
+      if (!isSuperAdmin) {
+        // Supports both simple ("admin") and composite ("social-care:admin") role keys.
+        // A JWT role "social-care:admin" satisfies a guard requiring "admin".
+        const hasRole = requiredRoles.some((required) =>
+          auth.roles.some((r) => r === required || r.endsWith(`:${required}`)),
+        );
+        if (!hasRole) {
+          return {
+            kind: "forbidden",
+            status: 403,
+            response: { success: false, error: { code: "AUTH-002", message: `Requires role: ${requiredRoles.join(" or ")}` } },
+          };
+        }
       }
     }
 

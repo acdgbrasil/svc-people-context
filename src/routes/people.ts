@@ -26,7 +26,7 @@ const splitFullName = (fullName: string): { givenName: string; familyName: strin
 export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: PeopleRouteDeps) =>
   new Elysia({ prefix: "/api/v1" })
     .post("/people", async ({ body, headers, set }) => {
-      const auth = await guard(headers, ["social_worker", "admin"]);
+      const auth = await guard(headers, ["worker", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       const validation = validateCreatePerson(body);
@@ -94,7 +94,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
     })
 
     .get("/people", async ({ headers, query, set }) => {
-      const auth = await guard(headers, ["social_worker", "owner", "admin"]);
+      const auth = await guard(headers, ["worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       const result = await people.list({
@@ -115,7 +115,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
     })
 
     .get("/people/by-cpf/:cpf", async ({ headers, params, set }) => {
-      const auth = await guard(headers, ["social_worker", "owner", "admin"]);
+      const auth = await guard(headers, ["worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       if (!CPF_RE.test(params.cpf)) {
@@ -132,7 +132,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
     })
 
     .get("/people/:personId", async ({ headers, params, set }) => {
-      const auth = await guard(headers, ["social_worker", "owner", "admin"]);
+      const auth = await guard(headers, ["worker", "owner", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       if (!UUID_RE.test(params.personId)) {
@@ -149,7 +149,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
     })
 
     .put("/people/:personId", async ({ params, body, headers, set }) => {
-      const auth = await guard(headers, ["social_worker", "admin"]);
+      const auth = await guard(headers, ["worker", "admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
 
       if (!UUID_RE.test(params.personId)) {

@@ -3,19 +3,23 @@ import { Elysia } from "elysia";
 import { createPeopleRoutes } from "../../src/routes/people.ts";
 import { createRolesRoutes } from "../../src/routes/roles.ts";
 import { createFakePersonRepository, createFakeRoleRepository } from "./fake-repositories.ts";
-import { createFakeAuthGuard } from "./fake-auth.ts";
+import { createFakeAuthGuard, createFakeAuthGuardWithRoles } from "./fake-auth.ts";
 import { createFakePublisher } from "./fake-publisher.ts";
 import { createNoopZitadelClient } from "../../src/zitadel/index.ts";
 import { parseJson, dataAs, dataAsArray, type IdData, type RoleData } from "./test-types.ts";
 
-const setup = () => {
+const setup = (guardRoles?: string[], guardSub?: string) => {
   const people = createFakePersonRepository();
   const roles = createFakeRoleRepository();
-  const guard = createFakeAuthGuard();
+  const guard = guardRoles
+    ? createFakeAuthGuardWithRoles(guardRoles, guardSub)
+    : createFakeAuthGuardWithRoles(["superadmin"]);
   const publisher = createFakePublisher();
   const zitadel = createNoopZitadelClient();
+  // People routes use a permissive guard so createPerson helper works
+  const peopleGuard = createFakeAuthGuard();
   const app = new Elysia()
-    .use(createPeopleRoutes({ people, guard, publisher, zitadel }))
+    .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, zitadel }))
     .use(createRolesRoutes({ people, roles, guard, publisher, zitadel }));
   return { app, people, roles, publisher };
 };
@@ -245,5 +249,85 @@ describe("GET /api/v1/roles", () => {
     const { app } = setup();
     const res = await app.handle(new Request("http://localhost/api/v1/roles"));
     expect(res.status).toBe(400);
+  });
+});
+
+// ─── RBAC security tests ────────────────────────────────────────
+
+describe("Role assignment — system-scoped authorization", () => {
+  it("social-care:admin can assign roles in social-care", async () => {
+    const { app } = setup(["social-care:admin"]);
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "patient" })),
+    );
+    expect(res.status).toBe(201);
+  });
+
+  it("social-care:admin cannot assign roles in queue-manager", async () => {
+    const { app } = setup(["social-care:admin"]);
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "queue-manager", role: "worker" })),
+    );
+    expect(res.status).toBe(403);
+    const body = await parseJson(res);
+    expect((body as unknown as { error: { code: string } }).error.code).toBe("ROL-007");
+  });
+
+  it("superadmin can assign roles in any system", async () => {
+    const { app } = setup(["superadmin"]);
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "queue-manager", role: "worker" })),
+    );
+    expect(res.status).toBe(201);
+  });
+
+  it("only superadmin can assign superadmin role", async () => {
+    const { app } = setup(["social-care:admin"]);
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "global", role: "superadmin" })),
+    );
+    expect(res.status).toBe(403);
+    const body = await parseJson(res);
+    expect((body as unknown as { error: { code: string } }).error.code).toBe("ROL-006");
+  });
+
+  it("superadmin can assign superadmin role", async () => {
+    const { app } = setup(["superadmin"]);
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "global", role: "superadmin" })),
+    );
+    expect(res.status).toBe(201);
+  });
+});
+
+describe("Role assignment — self-assignment prevention", () => {
+  it("admin cannot assign roles to themselves", async () => {
+    const { app, people } = setup(["social-care:admin"], "zitadel-user-123");
+    // Create person and link zitadelUserId to match the caller's sub
+    const personId = await createPerson(app);
+    await people.setZitadelUserId(personId, "zitadel-user-123", "test@test.com");
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "owner" })),
+    );
+    expect(res.status).toBe(403);
+    const body = await parseJson(res);
+    expect((body as unknown as { error: { code: string } }).error.code).toBe("ROL-008");
+  });
+
+  it("superadmin can assign roles to themselves", async () => {
+    const { app, people } = setup(["superadmin"], "superadmin-user");
+    const personId = await createPerson(app);
+    await people.setZitadelUserId(personId, "superadmin-user", "super@test.com");
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "admin" })),
+    );
+    expect(res.status).toBe(201);
   });
 });
