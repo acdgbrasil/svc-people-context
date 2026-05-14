@@ -71,7 +71,7 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, idp }: Role
       }
 
       // Rule 3: prevent self-assignment (matching uid no JWT vs uid persistido na pessoa)
-      if (!callerIsSuperAdmin && person.zitadelUserId === auth.auth.sub) {
+      if (!callerIsSuperAdmin && person.idpUserId === auth.auth.sub) {
         set.status = 403;
         return { success: false, error: { code: "ROL-008", message: "Cannot assign roles to yourself" } };
       }

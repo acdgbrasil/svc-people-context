@@ -1,6 +1,5 @@
 // ─── Authentik Management API types ────────────────────────────
 //
-// Substitui src/zitadel/types.ts conforme ADR-027 (Authentik replaces Zitadel).
 // Tipos cobrem operacoes que `people-context` precisa: CRUD de users,
 // gerenciamento de groups, password reset, service accounts (M2M).
 //

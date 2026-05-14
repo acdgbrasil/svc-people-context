@@ -23,8 +23,7 @@ const roles = createRoleRepository(sql);
 const guard = createAuthGuard(createJwtVerifier());
 const publisher = createOutboxPublisher(sql);
 
-// IdP client: Authentik (ADR-027). Strangler Fig — env Zitadel mantida
-// no env.ts ate Sprint 6 cleanup, mas o codigo de producao usa Authentik.
+// IdP client: Authentik (ADR-027).
 const idp = env.authentik.baseUrl && env.authentik.token
   ? createAuthentikClient({
       baseUrl: env.authentik.baseUrl,

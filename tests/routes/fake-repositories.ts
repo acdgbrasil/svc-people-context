@@ -16,7 +16,7 @@ export const createFakePersonRepository = (): PersonRepository & { readonly _sto
         cpf: input.cpf ?? null,
         birthDate: input.birthDate,
         email: input.email ?? null,
-        zitadelUserId: null,
+        idpUserId: null,
         idpUserPk: null,
         active: true,
         createdAt: new Date().toISOString(),
@@ -49,12 +49,12 @@ export const createFakePersonRepository = (): PersonRepository & { readonly _sto
       return updated;
     },
 
-    setZitadelUserId: async (id, zitadelUserUid, idpUserPk, email) => {
+    setIdpUserId: async (id, idpUserUid, idpUserPk, email) => {
       const existing = store.get(id);
       if (!existing) return null;
       const updated: Person = {
         ...existing,
-        zitadelUserId: zitadelUserUid,
+        idpUserId: idpUserUid,
         idpUserPk,
         email,
         updatedAt: new Date().toISOString(),

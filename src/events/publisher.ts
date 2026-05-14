@@ -61,9 +61,6 @@ const buildEvent = (subject: string, actorId: string, data: EventData): DomainEv
 // AppSec HIGH-8 + HIGH-9 (LGPD Art. 6º III — minimizacao): CPF e legacy_zitadel_sub
 // NAO entram em event payload. Audit trail correlaciona via personId; CPF pode
 // ser recuperado por consumer autorizado consultando o repository.
-// Identificadores de IdP: usar `idpUserId` (uid Authentik atual) em vez do
-// nome legado `zitadelUserId` para evitar contrato externo com nome enganoso
-// — code-review MEDIUM-8.
 export const events = {
   personRegistered: (actorId: string, data: { personId: string; fullName: string; birthDate: string }) =>
     buildEvent("people.person.registered", actorId, data),

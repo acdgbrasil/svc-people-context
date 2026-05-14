@@ -307,10 +307,10 @@ describe("Role assignment — system-scoped authorization", () => {
 
 describe("Role assignment — self-assignment prevention", () => {
   it("admin cannot assign roles to themselves", async () => {
-    const { app, people } = setup(["social-care:admin"], "zitadel-user-123");
-    // Create person and link zitadelUserId to match the caller's sub
+    const { app, people } = setup(["social-care:admin"], "idp-user-123");
+    // Create person and link idpUserId to match the caller's sub
     const personId = await createPerson(app);
-    await people.setZitadelUserId(personId, "zitadel-user-123", 100, "test@test.com");
+    await people.setIdpUserId(personId, "idp-user-123", 100, "test@test.com");
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "owner" })),
@@ -323,7 +323,7 @@ describe("Role assignment — self-assignment prevention", () => {
   it("superadmin can assign roles to themselves", async () => {
     const { app, people } = setup(["superadmin"], "superadmin-user");
     const personId = await createPerson(app);
-    await people.setZitadelUserId(personId, "superadmin-user", 101, "super@test.com");
+    await people.setIdpUserId(personId, "superadmin-user", 101, "super@test.com");
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "admin" })),

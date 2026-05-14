@@ -20,12 +20,11 @@ export type PersonRepository = {
   readonly findByCpf: (cpf: string) => Promise<Person | null>;
   readonly update: (id: string, input: UpdatePersonInput) => Promise<Person | null>;
   readonly list: (options?: ListOptions) => Promise<ListResult>;
-  // Persiste credenciais IdP do user provisionado. `zitadelUserUid` e o `uid`
+  // Persiste credenciais IdP do user provisionado. `idpUserUid` e o `uid`
   // Authentik (vai pro JWT sub); `idpUserPk` e o pk integer (chamadas Management API).
-  // Mantido nome `setZitadelUserId` por compat de coluna DB ate Sprint 6 cleanup.
-  readonly setZitadelUserId: (
+  readonly setIdpUserId: (
     id: string,
-    zitadelUserUid: string,
+    idpUserUid: string,
     idpUserPk: number,
     email: string,
   ) => Promise<Person | null>;
@@ -35,7 +34,7 @@ export type PersonRepository = {
 
 const SELECT_FIELDS = `
   id, full_name AS "fullName", cpf, birth_date::text AS "birthDate",
-  email, zitadel_user_id AS "zitadelUserId", idp_user_pk AS "idpUserPk", active,
+  email, idp_user_id AS "idpUserId", idp_user_pk AS "idpUserPk", active,
   created_at::text AS "createdAt", updated_at::text AS "updatedAt"
 `;
 
@@ -76,10 +75,10 @@ export const createPersonRepository = (sql: Sql): PersonRepository => ({
     return row ?? null;
   },
 
-  setZitadelUserId: async (id, zitadelUserUid, idpUserPk, email) => {
+  setIdpUserId: async (id, idpUserUid, idpUserPk, email) => {
     const [row] = await sql<Person[]>`
       UPDATE people
-      SET zitadel_user_id = ${zitadelUserUid},
+      SET idp_user_id = ${idpUserUid},
           idp_user_pk = ${idpUserPk},
           email = ${email},
           updated_at = now()

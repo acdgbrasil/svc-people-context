@@ -37,12 +37,11 @@ export type Person = {
   readonly cpf: string | null;
   readonly birthDate: string;
   readonly email: string | null;
-  // IdP user identifiers (Authentik post-migration; era Zitadel snowflake).
-  // - `zitadelUserId` (mantido por compat de coluna no DB ate Sprint 6 cleanup):
-  //   armazena o `uid` (hash hex64) que viaja no `sub` do JWT — actorId conforme ADR-023.
+  // IdP user identifiers (Authentik).
+  // - `idpUserId`: o `uid` (hash hex64) que viaja no `sub` do JWT — actorId conforme ADR-023.
   // - `idpUserPk`: pk integer do Authentik usado em mutacoes da Management API
   //   (`/api/v3/core/users/{pk}/`). Filtro `?uid=` nao funciona no DRF — code-review HIGH-6.
-  readonly zitadelUserId: string | null;
+  readonly idpUserId: string | null;
   readonly idpUserPk: number | null;
   readonly active: boolean;
   readonly createdAt: string;

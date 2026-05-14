@@ -40,15 +40,7 @@ export const env = {
     url: process.env["NATS_URL"],
   },
 
-  zitadel: {
-    managementUrl: process.env["ZITADEL_MANAGEMENT_URL"],
-    serviceAccountToken: process.env["ZITADEL_SERVICE_ACCOUNT_TOKEN"],
-    projectId: process.env["ZITADEL_PROJECT_ID"] ?? "",
-  },
-
-  // IdP: Authentik (ADR-027). Coexiste com `zitadel` durante migracao
-  // multi-issuer (Sprint 3-4 do plano em ADR-027). Apos cutover, secao
-  // `zitadel` acima e removida.
+  // IdP: Authentik (ADR-027).
   // AppSec HIGH-10: validacao consistente — ambos OU nenhum.
   authentik: {
     baseUrl: process.env["AUTHENTIK_URL"],

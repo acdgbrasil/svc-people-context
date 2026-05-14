@@ -66,7 +66,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, idp }: PeopleRout
 
         if (provision.ok) {
           // Persistir uid (sub do JWT — ADR-023) + pk (mutacoes Management API, HIGH-6).
-          await people.setZitadelUserId(
+          await people.setIdpUserId(
             person.id,
             provision.data.uid,
             provision.data.pk,
@@ -236,7 +236,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, idp }: PeopleRout
       if (person.idpUserPk !== null) {
         await publisher.publish(events.userDeactivated(auth.actorId, {
           personId: params.personId,
-          idpUserId: person.zitadelUserId ?? "",
+          idpUserId: person.idpUserId ?? "",
         }));
       }
 
@@ -282,7 +282,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, idp }: PeopleRout
       if (person.idpUserPk !== null) {
         await publisher.publish(events.userReactivated(auth.actorId, {
           personId: params.personId,
-          idpUserId: person.zitadelUserId ?? "",
+          idpUserId: person.idpUserId ?? "",
         }));
       }
 
@@ -324,7 +324,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, idp }: PeopleRout
       // queue-manager consome esse evento, monta email PT-BR + branding ACDG.
       await publisher.publish(events.passwordResetRequested(auth.actorId, {
         personId: params.personId,
-        idpUserId: person.zitadelUserId ?? "",
+        idpUserId: person.idpUserId ?? "",
         recoveryLink: recoveryResult.data.link,
       }));
 

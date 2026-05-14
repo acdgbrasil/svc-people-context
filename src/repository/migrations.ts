@@ -85,10 +85,27 @@ const migrations: readonly Migration[] = [
     // ADR-027 + code-review HIGH-6 (2026-05-13): Authentik DRF nao filtra por uid.
     // Persistir tambem o `pk` (integer interno do Authentik) para chamar mutacoes
     // direto em /api/v3/core/users/{pk}/ sem precisar de lookup por uid.
-    // Coluna `zitadel_user_id` continua sendo o `uid` que vai pro JWT sub (ADR-023).
     up: async (sql) => {
       await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS idp_user_pk INTEGER UNIQUE`;
       await sql`CREATE INDEX IF NOT EXISTS idx_people_idp_pk ON people(idp_user_pk) WHERE idp_user_pk IS NOT NULL`;
+    },
+  },
+  {
+    version: 6,
+    name: "rename_zitadel_to_idp_user_columns",
+    // ADR-027 cleanup: remove legado Zitadel da camada de DB. Idempotente via
+    // DO/EXCEPTION para suportar ambientes virgens (onde coluna ja foi criada
+    // pela migration 4 com nome antigo) e re-runs.
+    up: async (sql) => {
+      await sql`
+        DO $$
+        BEGIN
+          ALTER TABLE people RENAME COLUMN zitadel_user_id TO idp_user_id;
+        EXCEPTION
+          WHEN undefined_column THEN NULL;
+        END $$
+      `;
+      await sql`ALTER INDEX IF EXISTS idx_people_zitadel RENAME TO idx_people_idp_user_id`;
     },
   },
 ];
