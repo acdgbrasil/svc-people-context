@@ -138,6 +138,287 @@ describe("createAuthentikClient (unit, fetch mockado)", () => {
     }
     restore();
   });
+
+  it("findGroupByName retorna null com results vazio", async () => {
+    const restore = setupMockFetch({
+      status: 200,
+      body: { results: [], pagination: { count: 0 } },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.findGroupByName("ghost");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toBeNull();
+    restore();
+  });
+
+  it("findGroupByName propaga erro do request", async () => {
+    const restore = setupMockFetch({ status: 500, body: { detail: "boom" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.findGroupByName("x");
+    expect(result.ok).toBe(false);
+    restore();
+  });
+
+  it("findUserByUid retorna user encontrado e null quando vazio", async () => {
+    const restore1 = setupMockFetch({
+      status: 200,
+      body: {
+        results: [{ pk: 7, uid: "u-7", username: "joao", name: "J", email: "j@x.com", is_active: true, is_superuser: false, groups: [], attributes: {}, date_joined: "2026-01-01T00:00:00Z", last_login: null }],
+        pagination: { count: 1 },
+      },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const found = await client.findUserByUid("u-7");
+    expect(found.ok).toBe(true);
+    if (found.ok && found.data) expect(found.data.pk).toBe(7);
+    restore1();
+
+    const restore2 = setupMockFetch({ status: 200, body: { results: [], pagination: { count: 0 } } });
+    const empty = await client.findUserByUid("u-x");
+    expect(empty.ok).toBe(true);
+    if (empty.ok) expect(empty.data).toBeNull();
+    restore2();
+  });
+
+  it("findUserByUid propaga erro do request", async () => {
+    const restore = setupMockFetch({ status: 503, body: { detail: "down" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.findUserByUid("u-1");
+    expect(result.ok).toBe(false);
+    restore();
+  });
+
+  it("findUserByUsername propaga erro do request", async () => {
+    const restore = setupMockFetch({ status: 500, body: { detail: "boom" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.findUserByUsername("x");
+    expect(result.ok).toBe(false);
+    restore();
+  });
+
+  it("createUser POST com defaults aplicados", async () => {
+    let captured: { url: string; init?: RequestInit } | null = null;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      captured = { url, init };
+      return new Response(JSON.stringify({
+        pk: 1, uid: "u-1", username: "test", name: "Test", email: "t@x.com",
+        is_active: true, is_superuser: false, groups: [], attributes: {},
+        date_joined: "2026-01-01T00:00:00Z", last_login: null,
+      }), { status: 201, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.createUser({ username: "test", name: "Test", email: "t@x.com" });
+
+    expect(result.ok).toBe(true);
+    expect(captured).not.toBeNull();
+    const body = JSON.parse(captured!.init!.body as string);
+    expect(body.is_active).toBe(true);
+    expect(body.path).toBe("users");
+    expect(body.type).toBe("internal");
+    expect(body.groups).toEqual([]);
+    globalThis.fetch = original;
+  });
+
+  it("setPassword retorna ok mesmo com body nao-vazio (descartado)", async () => {
+    const restore = setupMockFetch({ status: 200, body: { something: "ignored" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.setPassword(1, "x");
+    expect(result.ok).toBe(true);
+    restore();
+  });
+
+  it("setPassword propaga erro", async () => {
+    const restore = setupMockFetch({ status: 400, body: { detail: "weak" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.setPassword(1, "x");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe(400);
+    restore();
+  });
+
+  it("deactivateUser/reactivateUser retornam void em ok e propagam erro", async () => {
+    const restoreOk = setupMockFetch({ status: 200, body: { pk: 1 } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    expect((await client.deactivateUser(1)).ok).toBe(true);
+    expect((await client.reactivateUser(1)).ok).toBe(true);
+    restoreOk();
+
+    const restoreErr = setupMockFetch({ status: 404, body: { detail: "not found" } });
+    expect((await client.deactivateUser(1)).ok).toBe(false);
+    expect((await client.reactivateUser(1)).ok).toBe(false);
+    restoreErr();
+  });
+
+  it("deleteUser via DELETE retorna ok em 204", async () => {
+    const restore = setupMockFetch({ status: 204, body: "", headers: { "content-length": "0" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.deleteUser(1);
+    expect(result.ok).toBe(true);
+    restore();
+  });
+
+  it("updateUserAttributes retorna user atualizado", async () => {
+    const restore = setupMockFetch({
+      status: 200,
+      body: {
+        pk: 5, uid: "u-5", username: "ana", name: "Ana", email: "a@x.com",
+        is_active: true, is_superuser: false, groups: [],
+        attributes: { org_id: "acdg-default", person_id: "p-1" },
+        date_joined: "2026-01-01T00:00:00Z", last_login: null,
+      },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.updateUserAttributes(5, { org_id: "acdg-default", person_id: "p-1" });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.attributes.org_id).toBe("acdg-default");
+    restore();
+  });
+
+  it("requestPasswordReset retorna link", async () => {
+    const restore = setupMockFetch({
+      status: 200,
+      body: { link: "https://auth.example/recovery?token=t" },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.requestPasswordReset(1);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.link).toContain("recovery");
+    restore();
+  });
+
+  it("addUserToGroup/removeUserFromGroup retornam void em 204", async () => {
+    const restore = setupMockFetch({ status: 204, body: "" });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    expect((await client.addUserToGroup("g-1", 1)).ok).toBe(true);
+    expect((await client.removeUserFromGroup("g-1", 1)).ok).toBe(true);
+    restore();
+  });
+
+  it("listUserGroups extrai groups_obj do user response", async () => {
+    const restore = setupMockFetch({
+      status: 200,
+      body: {
+        pk: 1, uid: "u-1", username: "ana", name: "Ana", email: "a@x.com",
+        is_active: true, is_superuser: false, groups: [], attributes: {},
+        date_joined: "2026-01-01T00:00:00Z", last_login: null,
+        groups_obj: [
+          { pk: "g-1", name: "social-care:admin", is_superuser: false },
+          { pk: "g-2", name: "social-care:worker", is_superuser: false },
+        ],
+      },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.listUserGroups(1);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.length).toBe(2);
+      expect(result.data[0]!.name).toBe("social-care:admin");
+    }
+    restore();
+  });
+
+  it("listUserGroups propaga erro do request", async () => {
+    const restore = setupMockFetch({ status: 500, body: { detail: "boom" } });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.listUserGroups(1);
+    expect(result.ok).toBe(false);
+    restore();
+  });
+
+  it("createServiceAccount retorna token + user_pk", async () => {
+    const restore = setupMockFetch({
+      status: 201,
+      body: { username: "svc", token: "tok-abc", user_uid: "u-svc", user_pk: 99 },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.createServiceAccount({
+      name: "svc",
+      create_group: true,
+      expiring: true,
+      expires: "2027-01-01T00:00:00Z",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.token).toBe("tok-abc");
+      expect(result.data.user_pk).toBe(99);
+    }
+    restore();
+  });
+
+  it("erro com body nao-JSON cai no fallback do parse (retorna raw text)", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response("plain text error", {
+        status: 500,
+        headers: { "Content-Type": "text/plain" },
+      })) as unknown as typeof fetch;
+
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.getUser(1);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(500);
+      expect(result.message).toBe("plain text error");
+    }
+    globalThis.fetch = original;
+  });
+
+  it("erro com JSON sem detail usa error_description", async () => {
+    const restore = setupMockFetch({
+      status: 401,
+      body: { error: "invalid_token", error_description: "Token expirado" },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.getUser(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toBe("Token expirado");
+    restore();
+  });
+
+  it("erro com JSON sem detail nem error_description usa campo error", async () => {
+    const restore = setupMockFetch({
+      status: 401,
+      body: { error: "invalid_request" },
+    });
+    const client = createAuthentikClient({ baseUrl: "http://x", token: "t" });
+    const result = await client.getUser(1);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toBe("invalid_request");
+    restore();
+  });
+});
+
+describe("createNoopAuthentikClient — cobertura adicional", () => {
+  it("findUserByUid e findUserByUsername retornam null", async () => {
+    const { createNoopAuthentikClient } = await import("../../src/idp/index.ts");
+    const client = createNoopAuthentikClient();
+    expect((await client.findUserByUsername("x")).ok).toBe(true);
+    expect((await client.findUserByUid("y")).ok).toBe(true);
+  });
+
+  it("listUserGroups retorna lista vazia", async () => {
+    const { createNoopAuthentikClient } = await import("../../src/idp/index.ts");
+    const client = createNoopAuthentikClient();
+    const result = await client.listUserGroups(1);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data).toEqual([]);
+  });
+
+  it("updateUserAttributes + addUserToGroup + removeUserFromGroup + deleteUser retornam ok", async () => {
+    const { createNoopAuthentikClient } = await import("../../src/idp/index.ts");
+    const client = createNoopAuthentikClient();
+    expect((await client.updateUserAttributes(1, { org_id: "x" })).ok).toBe(true);
+    expect((await client.addUserToGroup("g", 1)).ok).toBe(true);
+    expect((await client.removeUserFromGroup("g", 1)).ok).toBe(true);
+    expect((await client.deleteUser(1)).ok).toBe(true);
+    expect((await client.deactivateUser(1)).ok).toBe(true);
+    expect((await client.reactivateUser(1)).ok).toBe(true);
+    expect((await client.getUser(1)).ok).toBe(true);
+    expect((await client.setPassword(1, "x")).ok).toBe(true);
+  });
 });
 
 // ─── Noop client ───────────────────────────────────────────────

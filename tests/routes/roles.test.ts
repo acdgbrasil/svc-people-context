@@ -6,6 +6,7 @@ import { createFakePersonRepository, createFakeRoleRepository } from "./fake-rep
 import { createFakeAuthGuard, createFakeAuthGuardWithRoles } from "./fake-auth.ts";
 import { createFakePublisher } from "./fake-publisher.ts";
 import { createNoopAuthentikClient } from "../../src/idp/index.ts";
+import { createFakeAuthentikClient } from "./fake-authentik.ts";
 import { parseJson, dataAs, dataAsArray, type IdData, type RoleData } from "./test-types.ts";
 
 const setup = (guardRoles?: string[], guardSub?: string) => {
@@ -22,6 +23,19 @@ const setup = (guardRoles?: string[], guardSub?: string) => {
     .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, idp }))
     .use(createRolesRoutes({ people, roles, guard, publisher, idp }));
   return { app, people, roles, publisher };
+};
+
+const setupWithFakeIdp = (guardRoles: string[], guardSub = "test-user") => {
+  const people = createFakePersonRepository();
+  const roles = createFakeRoleRepository();
+  const guard = createFakeAuthGuardWithRoles(guardRoles, guardSub);
+  const publisher = createFakePublisher();
+  const idp = createFakeAuthentikClient();
+  const peopleGuard = createFakeAuthGuard();
+  const app = new Elysia()
+    .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, idp }))
+    .use(createRolesRoutes({ people, roles, guard, publisher, idp }));
+  return { app, people, roles, publisher, idp };
 };
 
 const json = (body: unknown) => ({
@@ -329,5 +343,156 @@ describe("Role assignment — self-assignment prevention", () => {
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "admin" })),
     );
     expect(res.status).toBe(201);
+  });
+});
+
+// ─── Domain validation (ROL-001) ────────────────────────────────
+
+describe("POST /api/v1/people/:personId/roles — domain validation", () => {
+  it("retorna 400 com ROL-001 quando system é apenas whitespace", async () => {
+    const { app } = setup();
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "   ", role: "patient" })),
+    );
+    expect(res.status).toBe(400);
+    const body = await parseJson(res) as unknown as { error: { code: string } };
+    expect(body.error.code).toBe("ROL-001");
+  });
+
+  it("retorna 400 com ROL-001 quando role é apenas whitespace", async () => {
+    const { app } = setup();
+    const personId = await createPerson(app);
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "   " })),
+    );
+    expect(res.status).toBe(400);
+    const body = await parseJson(res) as unknown as { error: { code: string } };
+    expect(body.error.code).toBe("ROL-001");
+  });
+});
+
+// ─── deactivate/reactivate authz + sync IdP ─────────────────────
+
+describe("PUT roles/:roleId/deactivate — authz e IdP sync", () => {
+  const assignRole = async (
+    app: { handle: (req: Request) => Promise<Response> },
+    personId: string,
+    system: string,
+    role: string,
+  ): Promise<string> => {
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system, role })),
+    );
+    return dataAs<IdData>(await parseJson(res)).id;
+  };
+
+  it("retorna 403 ROL-007 quando admin tenta desativar role fora dos seus sistemas", async () => {
+    // assign como superadmin pra criar a role
+    const { app: appSuper, roles } = setup(["superadmin"]);
+    const personId = await createPerson(appSuper);
+    const roleId = await assignRole(appSuper, personId, "queue-manager", "worker");
+
+    // tenta desativar com admin de social-care
+    const guard = createFakeAuthGuardWithRoles(["social-care:admin"]);
+    const peopleGuard = createFakeAuthGuard();
+    const publisher = createFakePublisher();
+    const idp = createNoopAuthentikClient();
+    const people = createFakePersonRepository();
+    const app = new Elysia()
+      .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, idp }))
+      .use(createRolesRoutes({ people, roles, guard, publisher, idp }));
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
+    );
+    expect(res.status).toBe(403);
+    const body = await parseJson(res) as unknown as { error: { code: string } };
+    expect(body.error.code).toBe("ROL-007");
+  });
+
+  it("sincroniza remocao no Authentik quando pessoa tem idpUserPk", async () => {
+    const { app, people, idp } = setupWithFakeIdp(["superadmin"]);
+    const personId = await createPerson(app);
+    await people.setIdpUserId(personId, "uid-1", 200, "x@y.com");
+    const roleId = await assignRole(app, personId, "social-care", "worker");
+    idp.calls.removeUserFromGroup.length = 0;
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
+    );
+    expect(res.status).toBe(204);
+    expect(idp.calls.removeUserFromGroup.length).toBe(1);
+    expect(idp.calls.removeUserFromGroup[0]!.userPk).toBe(200);
+  });
+
+  it("nao sincroniza Authentik quando pessoa nao tem idpUserPk", async () => {
+    const { app, idp } = setupWithFakeIdp(["superadmin"]);
+    const personId = await createPerson(app);
+    const roleId = await assignRole(app, personId, "social-care", "worker");
+    idp.calls.removeUserFromGroup.length = 0;
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
+    );
+    expect(res.status).toBe(204);
+    expect(idp.calls.removeUserFromGroup.length).toBe(0);
+  });
+});
+
+describe("PUT roles/:roleId/reactivate — authz e IdP sync", () => {
+  const assignRole = async (
+    app: { handle: (req: Request) => Promise<Response> },
+    personId: string,
+    system: string,
+    role: string,
+  ): Promise<string> => {
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system, role })),
+    );
+    return dataAs<IdData>(await parseJson(res)).id;
+  };
+
+  it("retorna 403 ROL-007 quando admin tenta reativar role fora dos seus sistemas", async () => {
+    const { app: appSuper, roles } = setup(["superadmin"]);
+    const personId = await createPerson(appSuper);
+    const roleId = await assignRole(appSuper, personId, "queue-manager", "worker");
+    await appSuper.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
+    );
+
+    const guard = createFakeAuthGuardWithRoles(["social-care:admin"]);
+    const peopleGuard = createFakeAuthGuard();
+    const publisher = createFakePublisher();
+    const idp = createNoopAuthentikClient();
+    const people = createFakePersonRepository();
+    const app = new Elysia()
+      .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, idp }))
+      .use(createRolesRoutes({ people, roles, guard, publisher, idp }));
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/reactivate`, { method: "PUT" }),
+    );
+    expect(res.status).toBe(403);
+    const body = await parseJson(res) as unknown as { error: { code: string } };
+    expect(body.error.code).toBe("ROL-007");
+  });
+
+  it("sincroniza re-atribuicao no Authentik quando pessoa tem idpUserPk", async () => {
+    const { app, people, idp } = setupWithFakeIdp(["superadmin"]);
+    const personId = await createPerson(app);
+    await people.setIdpUserId(personId, "uid-1", 300, "x@y.com");
+    const roleId = await assignRole(app, personId, "social-care", "worker");
+    await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/deactivate`, { method: "PUT" }),
+    );
+    idp.calls.addUserToGroup.length = 0;
+
+    const res = await app.handle(
+      new Request(`http://localhost/api/v1/people/${personId}/roles/${roleId}/reactivate`, { method: "PUT" }),
+    );
+    expect(res.status).toBe(204);
+    expect(idp.calls.addUserToGroup.length).toBe(1);
+    expect(idp.calls.addUserToGroup[0]!.userPk).toBe(300);
   });
 });
