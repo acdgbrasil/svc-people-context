@@ -3,10 +3,10 @@ import type { PersonRepository } from "../repository/person-repository.ts";
 import type { RoleRepository } from "../repository/role-repository.ts";
 import type { AuthGuard } from "../middleware/auth.ts";
 import type { EventPublisher } from "../events/publisher.ts";
-import type { ZitadelClient } from "../zitadel/index.ts";
+import type { AuthentikClient } from "../idp/index.ts";
 import { events } from "../events/publisher.ts";
 import { validateAssignRole } from "../domain/index.ts";
-import { env } from "../config/env.ts";
+import { syncRoleAssignment, syncRoleRemoval } from "../application/index.ts";
 
 const timestamp = () => new Date().toISOString();
 
@@ -15,7 +15,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const isSuperAdmin = (roles: readonly string[]): boolean =>
   roles.some((r) => r === "superadmin");
 
-// Extracts systems where the caller has "admin" — e.g. ["social-care:admin"] → ["social-care"]
+// Extrai sistemas onde o caller tem "admin" — ex: ["social-care:admin"] -> ["social-care"]
 const adminSystems = (roles: readonly string[]): readonly string[] =>
   roles
     .filter((r) => r.endsWith(":admin"))
@@ -26,10 +26,10 @@ type RolesRouteDeps = {
   readonly roles: RoleRepository;
   readonly guard: AuthGuard;
   readonly publisher: EventPublisher;
-  readonly zitadel: ZitadelClient;
+  readonly idp: AuthentikClient;
 };
 
-export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: RolesRouteDeps) =>
+export const createRolesRoutes = ({ people, roles, guard, publisher, idp }: RolesRouteDeps) =>
   new Elysia({ prefix: "/api/v1" })
     .post("/people/:personId/roles", async ({ params, body, headers, set }) => {
       const auth = await guard(headers, ["admin"]);
@@ -55,7 +55,7 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         return { success: false, error: { code: "ROL-006", message: "Only superadmin can assign superadmin role" } };
       }
 
-      // Rule 2: admin can only assign roles within their own system(s)
+      // Rule 2: admin pode atribuir roles apenas dentro dos seus proprios sistemas
       if (!callerIsSuperAdmin) {
         const allowed = adminSystems(callerRoles);
         if (!allowed.includes(body.system)) {
@@ -64,19 +64,13 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         }
       }
 
-      // Rule 3: cannot assign roles to yourself (except superadmin)
-      if (!callerIsSuperAdmin && auth.auth.sub === auth.actorId) {
-        // actorId is the person performing the action — if it matches the JWT sub,
-        // we also need to check if the target personId belongs to the caller
-      }
-
       const person = await people.findById(params.personId);
       if (!person) {
         set.status = 404;
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
       }
 
-      // Rule 3 (continued): prevent self-assignment by matching zitadelUserId
+      // Rule 3: prevent self-assignment (matching uid no JWT vs uid persistido na pessoa)
       if (!callerIsSuperAdmin && person.zitadelUserId === auth.auth.sub) {
         set.status = 403;
         return { success: false, error: { code: "ROL-008", message: "Cannot assign roles to yourself" } };
@@ -94,12 +88,13 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         role: body.role,
       }));
 
-      // Sync role to Zitadel if person has a login
-      if (person.zitadelUserId && env.zitadel.projectId) {
-        await zitadel.addUserGrant({
-          userId: person.zitadelUserId,
-          projectId: env.zitadel.projectId,
-          roleKeys: [`${body.system}:${body.role}`],
+      // Sincroniza role com Authentik se pessoa tem login.
+      if (person.idpUserPk !== null) {
+        await syncRoleAssignment(idp, {
+          system: body.system,
+          role: body.role,
+          idpUserPk: person.idpUserPk,
+          personId: params.personId,
         });
       }
 
@@ -141,19 +136,23 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
       }
 
-      const person = await people.findById(params.personId);
-
-      const deactivated = await roles.deactivate(params.personId, params.roleId);
-      if (!deactivated) {
+      // Code-review HIGH-1: auth check ANTES da mutacao (sem rollback compensatorio).
+      const existingRole = await roles.findById(params.personId, params.roleId);
+      if (!existingRole || !existingRole.active) {
         set.status = 404;
         return { success: false, error: { code: "ROL-002", message: "Active role not found" } };
       }
-
-      // System-scoped authorization: admin can only deactivate roles in their own system(s)
-      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(deactivated.system)) {
-        await roles.reactivate(params.personId, params.roleId); // rollback
+      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(existingRole.system)) {
         set.status = 403;
-        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${deactivated.system}'` } };
+        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${existingRole.system}'` } };
+      }
+
+      const person = await people.findById(params.personId);
+      const deactivated = await roles.deactivate(params.personId, params.roleId);
+      if (!deactivated) {
+        // Race: foi desativada por outra request entre findById e deactivate.
+        set.status = 409;
+        return { success: false, error: { code: "ROL-009", message: "Role state changed during request" } };
       }
 
       await publisher.publish(events.roleDeactivated(auth.actorId, {
@@ -162,16 +161,14 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         role: deactivated.role,
       }));
 
-      // Remove matching grant from Zitadel
-      if (person?.zitadelUserId && env.zitadel.projectId) {
-        const grantsResult = await zitadel.listUserGrants(person.zitadelUserId, env.zitadel.projectId);
-        if (grantsResult.ok) {
-          const roleKey = `${deactivated.system}:${deactivated.role}`;
-          const grant = grantsResult.data.result.find((g) => g.roleKeys.includes(roleKey));
-          if (grant) {
-            await zitadel.removeUserGrant(person.zitadelUserId, grant.id);
-          }
-        }
+      // Remove user do group correspondente no Authentik
+      if (person?.idpUserPk != null) {
+        await syncRoleRemoval(idp, {
+          system: deactivated.system,
+          role: deactivated.role,
+          idpUserPk: person.idpUserPk,
+          personId: params.personId,
+        });
       }
 
       set.status = 204;
@@ -186,19 +183,22 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         return { success: false, error: { code: "ROL-005", message: "personId and roleId must be valid UUIDs" } };
       }
 
-      const person = await people.findById(params.personId);
-
-      const reactivated = await roles.reactivate(params.personId, params.roleId);
-      if (!reactivated) {
+      // Code-review HIGH-1: auth check ANTES da mutacao.
+      const existingRole = await roles.findById(params.personId, params.roleId);
+      if (!existingRole || existingRole.active) {
         set.status = 404;
         return { success: false, error: { code: "ROL-003", message: "Inactive role not found" } };
       }
-
-      // System-scoped authorization: admin can only reactivate roles in their own system(s)
-      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(reactivated.system)) {
-        await roles.deactivate(params.personId, params.roleId); // rollback
+      if (!isSuperAdmin(auth.auth.roles) && !adminSystems(auth.auth.roles).includes(existingRole.system)) {
         set.status = 403;
-        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${reactivated.system}'` } };
+        return { success: false, error: { code: "ROL-007", message: `Not authorized to manage roles in system '${existingRole.system}'` } };
+      }
+
+      const person = await people.findById(params.personId);
+      const reactivated = await roles.reactivate(params.personId, params.roleId);
+      if (!reactivated) {
+        set.status = 409;
+        return { success: false, error: { code: "ROL-009", message: "Role state changed during request" } };
       }
 
       await publisher.publish(events.roleReactivated(auth.actorId, {
@@ -207,12 +207,13 @@ export const createRolesRoutes = ({ people, roles, guard, publisher, zitadel }: 
         role: reactivated.role,
       }));
 
-      // Re-add grant in Zitadel
-      if (person?.zitadelUserId && env.zitadel.projectId) {
-        await zitadel.addUserGrant({
-          userId: person.zitadelUserId,
-          projectId: env.zitadel.projectId,
-          roleKeys: [`${reactivated.system}:${reactivated.role}`],
+      // Re-adicionar ao group correspondente no Authentik
+      if (person?.idpUserPk != null) {
+        await syncRoleAssignment(idp, {
+          system: reactivated.system,
+          role: reactivated.role,
+          idpUserPk: person.idpUserPk,
+          personId: params.personId,
         });
       }
 

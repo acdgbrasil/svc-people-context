@@ -1,18 +1,22 @@
-import type { Sql } from "postgres";
+import type { JSONValue, Sql } from "postgres";
 
 // ─── Types ──────────────────────────────────────────────────────
 
+export type EventData = Record<string, string | undefined>;
+
+export type EventPayload = {
+  readonly metadata: {
+    readonly eventId: string;
+    readonly occurredAt: string;
+    readonly schemaVersion: string;
+  };
+  readonly actorId: string;
+  readonly data: EventData;
+};
+
 export type DomainEvent = {
   readonly subject: string;
-  readonly payload: {
-    readonly metadata: {
-      readonly eventId: string;
-      readonly occurredAt: string;
-      readonly schemaVersion: string;
-    };
-    readonly actorId: string;
-    readonly data: Record<string, unknown>;
-  };
+  readonly payload: EventPayload;
 };
 
 export type EventPublisher = {
@@ -26,7 +30,7 @@ export const createOutboxPublisher = (sql: Sql): EventPublisher => ({
   publish: async (event) => {
     await sql`
       INSERT INTO outbox_events (subject, payload)
-      VALUES (${event.subject}, ${JSON.stringify(event.payload)})
+      VALUES (${event.subject}, ${sql.json(event.payload as unknown as JSONValue)})
     `;
   },
   close: async () => {},
@@ -41,7 +45,7 @@ export const createNoopPublisher = (): EventPublisher => ({
 
 // ─── Event builders ─────────────────────────────────────────────
 
-const buildEvent = (subject: string, actorId: string, data: Record<string, unknown>): DomainEvent => ({
+const buildEvent = (subject: string, actorId: string, data: EventData): DomainEvent => ({
   subject,
   payload: {
     metadata: {
@@ -54,11 +58,17 @@ const buildEvent = (subject: string, actorId: string, data: Record<string, unkno
   },
 });
 
+// AppSec HIGH-8 + HIGH-9 (LGPD Art. 6º III — minimizacao): CPF e legacy_zitadel_sub
+// NAO entram em event payload. Audit trail correlaciona via personId; CPF pode
+// ser recuperado por consumer autorizado consultando o repository.
+// Identificadores de IdP: usar `idpUserId` (uid Authentik atual) em vez do
+// nome legado `zitadelUserId` para evitar contrato externo com nome enganoso
+// — code-review MEDIUM-8.
 export const events = {
-  personRegistered: (actorId: string, data: { personId: string; fullName: string; cpf?: string; birthDate: string }) =>
+  personRegistered: (actorId: string, data: { personId: string; fullName: string; birthDate: string }) =>
     buildEvent("people.person.registered", actorId, data),
 
-  personUpdated: (actorId: string, data: { personId: string; fullName?: string; cpf?: string; birthDate?: string }) =>
+  personUpdated: (actorId: string, data: { personId: string; fullName?: string; birthDate?: string }) =>
     buildEvent("people.person.updated", actorId, data),
 
   roleAssigned: (actorId: string, data: { personId: string; system: string; role: string }) =>
@@ -70,15 +80,19 @@ export const events = {
   roleReactivated: (actorId: string, data: { personId: string; system: string; role: string }) =>
     buildEvent("people.role.reactivated", actorId, data),
 
-  userProvisioned: (actorId: string, data: { personId: string; zitadelUserId: string; email: string }) =>
+  userProvisioned: (actorId: string, data: { personId: string; idpUserId: string }) =>
     buildEvent("people.user.provisioned", actorId, data),
 
-  userDeactivated: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
+  userDeactivated: (actorId: string, data: { personId: string; idpUserId: string }) =>
     buildEvent("people.user.deactivated", actorId, data),
 
-  userReactivated: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
+  userReactivated: (actorId: string, data: { personId: string; idpUserId: string }) =>
     buildEvent("people.user.reactivated", actorId, data),
 
-  passwordResetRequested: (actorId: string, data: { personId: string; zitadelUserId: string }) =>
-    buildEvent("people.user.password_reset_requested", actorId, data),
+  // ADR-030 + AppSec CRITICAL-2: recoveryLink viaja apenas no evento NATS,
+  // nunca no response HTTP. queue-manager consome este evento para montar email.
+  passwordResetRequested: (
+    actorId: string,
+    data: { personId: string; idpUserId: string; recoveryLink: string },
+  ) => buildEvent("people.user.password_reset_requested", actorId, data),
 } as const;

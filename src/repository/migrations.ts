@@ -79,6 +79,18 @@ const migrations: readonly Migration[] = [
       await sql`CREATE INDEX IF NOT EXISTS idx_people_email ON people(email) WHERE email IS NOT NULL`;
     },
   },
+  {
+    version: 5,
+    name: "add_idp_user_pk",
+    // ADR-027 + code-review HIGH-6 (2026-05-13): Authentik DRF nao filtra por uid.
+    // Persistir tambem o `pk` (integer interno do Authentik) para chamar mutacoes
+    // direto em /api/v3/core/users/{pk}/ sem precisar de lookup por uid.
+    // Coluna `zitadel_user_id` continua sendo o `uid` que vai pro JWT sub (ADR-023).
+    up: async (sql) => {
+      await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS idp_user_pk INTEGER UNIQUE`;
+      await sql`CREATE INDEX IF NOT EXISTS idx_people_idp_pk ON people(idp_user_pk) WHERE idp_user_pk IS NOT NULL`;
+    },
+  },
 ];
 
 // ─── Migration runner ──────────────────────────────────────────

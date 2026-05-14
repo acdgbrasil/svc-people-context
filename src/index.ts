@@ -7,7 +7,7 @@ import { createJwtVerifier, validateJwks } from "./middleware/jwt.ts";
 import { createAuthGuard } from "./middleware/auth.ts";
 import { createOutboxPublisher } from "./events/publisher.ts";
 import { createOutboxRelay, createNoopRelay } from "./events/outbox-relay.ts";
-import { createZitadelClient, createNoopZitadelClient } from "./zitadel/index.ts";
+import { createAuthentikClient, createNoopAuthentikClient } from "./idp/index.ts";
 import { createHealthRoutes } from "./routes/health.ts";
 import { createPeopleRoutes } from "./routes/people.ts";
 import { createRolesRoutes } from "./routes/roles.ts";
@@ -23,15 +23,19 @@ const roles = createRoleRepository(sql);
 const guard = createAuthGuard(createJwtVerifier());
 const publisher = createOutboxPublisher(sql);
 
-const zitadel = env.zitadel.managementUrl && env.zitadel.serviceAccountToken
-  ? createZitadelClient({
-      baseUrl: env.zitadel.managementUrl,
-      token: env.zitadel.serviceAccountToken,
+// IdP client: Authentik (ADR-027). Strangler Fig — env Zitadel mantida
+// no env.ts ate Sprint 6 cleanup, mas o codigo de producao usa Authentik.
+const idp = env.authentik.baseUrl && env.authentik.token
+  ? createAuthentikClient({
+      baseUrl: env.authentik.baseUrl,
+      token: env.authentik.token,
     })
-  : createNoopZitadelClient();
+  : createNoopAuthentikClient();
 
-if (!env.zitadel.managementUrl) {
-  console.log("[zitadel] ZITADEL_MANAGEMENT_URL not set — user provisioning disabled");
+if (!env.authentik.baseUrl) {
+  console.log("[idp] AUTHENTIK_URL not set — user provisioning disabled (noop client)");
+} else {
+  console.log(`[idp] Authentik client active (${env.authentik.baseUrl})`);
 }
 
 const relay = env.nats.url
@@ -41,8 +45,8 @@ relay.start();
 
 const app = new Elysia()
   .use(createHealthRoutes({ sql, relay }))
-  .use(createPeopleRoutes({ people, guard, publisher, zitadel }))
-  .use(createRolesRoutes({ people, roles, guard, publisher, zitadel }))
+  .use(createPeopleRoutes({ people, guard, publisher, idp }))
+  .use(createRolesRoutes({ people, roles, guard, publisher, idp }))
   .listen({ port: env.port, hostname: env.host });
 
 console.log(`people-context running on ${app.server?.hostname}:${app.server?.port}`);

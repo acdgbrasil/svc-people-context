@@ -45,4 +45,32 @@ export const env = {
     serviceAccountToken: process.env["ZITADEL_SERVICE_ACCOUNT_TOKEN"],
     projectId: process.env["ZITADEL_PROJECT_ID"] ?? "",
   },
+
+  // IdP: Authentik (ADR-027). Coexiste com `zitadel` durante migracao
+  // multi-issuer (Sprint 3-4 do plano em ADR-027). Apos cutover, secao
+  // `zitadel` acima e removida.
+  // AppSec HIGH-10: validacao consistente — ambos OU nenhum.
+  authentik: {
+    baseUrl: process.env["AUTHENTIK_URL"],
+    token: process.env["AUTHENTIK_TOKEN"],
+  },
 } as const;
+
+// AppSec HIGH-10: validacao de coerencia das envs do IdP no boot.
+// Falha cedo (fail-fast) se config for parcial — evita degradacao silenciosa
+// onde createUser silenciosamente nao chama Authentik por causa de noop client.
+const { baseUrl: authentikUrl, token: authentikToken } = env.authentik;
+const authentikConfigured = authentikUrl !== undefined && authentikToken !== undefined;
+const authentikPartial = !authentikConfigured && (authentikUrl !== undefined || authentikToken !== undefined);
+
+if (authentikPartial) {
+  const missing = authentikUrl === undefined ? "AUTHENTIK_URL" : "AUTHENTIK_TOKEN";
+  throw new Error(
+    `[env] Authentik config invalida — ${missing} ausente. ` +
+      `Defina AMBOS AUTHENTIK_URL e AUTHENTIK_TOKEN, ou NENHUM (para modo noop em dev).`,
+  );
+}
+
+if (isProduction && !authentikConfigured) {
+  throw new Error("[env] AUTHENTIK_URL + AUTHENTIK_TOKEN sao obrigatorios em producao.");
+}

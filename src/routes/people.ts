@@ -2,9 +2,11 @@ import { Elysia, t } from "elysia";
 import type { PersonRepository } from "../repository/person-repository.ts";
 import type { AuthGuard } from "../middleware/auth.ts";
 import type { EventPublisher } from "../events/publisher.ts";
-import type { ZitadelClient } from "../zitadel/index.ts";
+import type { AuthentikClient } from "../idp/index.ts";
 import { events } from "../events/publisher.ts";
 import { validateCreatePerson, validateUpdatePerson } from "../domain/index.ts";
+import { provisionUserInIdp, usernameFromEmail } from "../application/index.ts";
+
 const timestamp = () => new Date().toISOString();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,16 +16,10 @@ type PeopleRouteDeps = {
   readonly people: PersonRepository;
   readonly guard: AuthGuard;
   readonly publisher: EventPublisher;
-  readonly zitadel: ZitadelClient;
+  readonly idp: AuthentikClient;
 };
 
-const splitFullName = (fullName: string): { givenName: string; familyName: string } => {
-  const parts = fullName.trim().split(/\s+/);
-  if (parts.length === 1) return { givenName: parts[0]!, familyName: parts[0]! };
-  return { givenName: parts[0]!, familyName: parts.slice(1).join(" ") };
-};
-
-export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: PeopleRouteDeps) =>
+export const createPeopleRoutes = ({ people, guard, publisher, idp }: PeopleRouteDeps) =>
   new Elysia({ prefix: "/api/v1" })
     .post("/people", async ({ body, headers, set }) => {
       const auth = await guard(headers, ["worker", "admin"]);
@@ -45,36 +41,48 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
 
       const person = await people.create(body);
 
+      // AppSec HIGH-8: CPF NAO entra em event payload (LGPD minimizacao).
+      // Consumidores autorizados consultam o repository se precisarem.
       await publisher.publish(events.personRegistered(auth.actorId, {
         personId: person.id,
         fullName: person.fullName,
-        cpf: body.cpf,
         birthDate: body.birthDate,
       }));
 
       if (body.createLogin && body.email) {
-        const { givenName, familyName } = splitFullName(body.fullName);
-        const zResult = await zitadel.createUser({
-          profile: { givenName, familyName },
-          email: { email: body.email, isVerified: false },
-          password: body.initialPassword
-            ? { password: body.initialPassword, changeRequired: true }
-            : undefined,
-          metadata: [{ key: "personId", value: person.id }],
+        // Application layer encapsula create+setPassword (Arch M1).
+        const provision = await provisionUserInIdp(idp, {
+          username: usernameFromEmail(body.email),
+          name: body.fullName,
+          email: body.email,
+          initialPassword: body.initialPassword,
+          attributes: {
+            person_id: person.id,
+            cpf: body.cpf,
+            org_id: "acdg-default",
+            settings: { locale: "pt-BR" },
+          },
         });
 
-        if (zResult.ok) {
-          await people.setZitadelUserId(person.id, zResult.data.userId, body.email);
+        if (provision.ok) {
+          // Persistir uid (sub do JWT — ADR-023) + pk (mutacoes Management API, HIGH-6).
+          await people.setZitadelUserId(
+            person.id,
+            provision.data.uid,
+            provision.data.pk,
+            body.email,
+          );
           await publisher.publish(events.userProvisioned(auth.actorId, {
             personId: person.id,
-            zitadelUserId: zResult.data.userId,
-            email: body.email,
+            idpUserId: provision.data.uid,
           }));
         } else {
+          // AppSec HIGH-7: nao vazar Authentik message no response.
+          console.warn(`[idp] provisionUser failed personId=${person.id} code=${provision.code}`);
           set.status = 207;
           return {
             data: { id: person.id },
-            warnings: [{ code: "ZIT-001", message: `Person created but Zitadel user provisioning failed: ${zResult.message}` }],
+            warnings: [{ code: "IDP-001", message: "Person created but IdP user provisioning failed" }],
             meta: { timestamp: timestamp() },
           };
         }
@@ -169,10 +177,10 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
       }
 
+      // AppSec HIGH-8: CPF nao entra em event payload.
       await publisher.publish(events.personUpdated(auth.actorId, {
         personId: params.personId,
         fullName: body.fullName,
-        cpf: body.cpf,
         birthDate: body.birthDate,
       }));
 
@@ -185,7 +193,7 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
       }),
     })
 
-    // ─── Deactivate person + Zitadel user ────────────────────────
+    // ─── Deactivate person + Authentik user ────────────────────────
     .put("/people/:personId/deactivate", async ({ params, headers, set }) => {
       const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
@@ -200,30 +208,42 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
         set.status = 404;
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
       }
-
-      const deactivated = await people.deactivate(params.personId);
-      if (!deactivated) {
+      if (!person.active) {
         set.status = 409;
         return { success: false, error: { code: "PEO-005", message: "Person is already inactive" } };
       }
 
-      if (person.zitadelUserId) {
-        const zResult = await zitadel.deactivateUser(person.zitadelUserId);
-        if (!zResult.ok) {
-          await people.reactivate(params.personId);
+      // AppSec HIGH-5: IdP PRIMEIRO, DB depois. Sem rollback compensatorio.
+      // Se DB falhar apos IdP, registro inconsistente e detectavel por
+      // reconciliacao (e o IdP estar deactivated e seguro como degraded mode).
+      if (person.idpUserPk !== null) {
+        const deactivateResult = await idp.deactivateUser(person.idpUserPk);
+        if (!deactivateResult.ok) {
+          // AppSec HIGH-7: NAO vazar Authentik message no response.
+          console.warn(`[idp] deactivateUser failed pk=${person.idpUserPk} code=${deactivateResult.code}`);
           set.status = 502;
-          return { success: false, error: { code: "ZIT-002", message: `Failed to deactivate Zitadel user: ${zResult.message}` } };
+          return { success: false, error: { code: "IDP-002", message: "Failed to deactivate IdP user" } };
         }
+      }
+
+      const deactivated = await people.deactivate(params.personId);
+      if (!deactivated) {
+        // Race: outro request desativou entre findById e deactivate.
+        set.status = 409;
+        return { success: false, error: { code: "PEO-005", message: "Person is already inactive" } };
+      }
+
+      if (person.idpUserPk !== null) {
         await publisher.publish(events.userDeactivated(auth.actorId, {
           personId: params.personId,
-          zitadelUserId: person.zitadelUserId,
+          idpUserId: person.zitadelUserId ?? "",
         }));
       }
 
       set.status = 204;
     })
 
-    // ─── Reactivate person + Zitadel user ────────────────────────
+    // ─── Reactivate person + Authentik user ────────────────────────
     .put("/people/:personId/reactivate", async ({ params, headers, set }) => {
       const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
@@ -238,6 +258,20 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
         set.status = 404;
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
       }
+      if (person.active) {
+        set.status = 409;
+        return { success: false, error: { code: "PEO-006", message: "Person is already active" } };
+      }
+
+      // AppSec HIGH-5: IdP PRIMEIRO, DB depois.
+      if (person.idpUserPk !== null) {
+        const reactivateResult = await idp.reactivateUser(person.idpUserPk);
+        if (!reactivateResult.ok) {
+          console.warn(`[idp] reactivateUser failed pk=${person.idpUserPk} code=${reactivateResult.code}`);
+          set.status = 502;
+          return { success: false, error: { code: "IDP-003", message: "Failed to reactivate IdP user" } };
+        }
+      }
 
       const reactivated = await people.reactivate(params.personId);
       if (!reactivated) {
@@ -245,23 +279,19 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
         return { success: false, error: { code: "PEO-006", message: "Person is already active" } };
       }
 
-      if (person.zitadelUserId) {
-        const zResult = await zitadel.reactivateUser(person.zitadelUserId);
-        if (!zResult.ok) {
-          await people.deactivate(params.personId);
-          set.status = 502;
-          return { success: false, error: { code: "ZIT-003", message: `Failed to reactivate Zitadel user: ${zResult.message}` } };
-        }
+      if (person.idpUserPk !== null) {
         await publisher.publish(events.userReactivated(auth.actorId, {
           personId: params.personId,
-          zitadelUserId: person.zitadelUserId,
+          idpUserId: person.zitadelUserId ?? "",
         }));
       }
 
       set.status = 204;
     })
 
-    // ─── Request password reset (proxy to Zitadel) ───────────────
+    // ─── Request password reset (proxy para Authentik recovery) ────
+    // ADR-030 + AppSec CRITICAL-2 fix: link NAO retorna no response body.
+    // Apenas publica evento NATS para queue-manager montar email PT-BR.
     .post("/people/:personId/request-password-reset", async ({ params, headers, set }) => {
       const auth = await guard(headers, ["admin"]);
       if (auth.kind !== "ok") { set.status = auth.status; return auth.response; }
@@ -277,21 +307,27 @@ export const createPeopleRoutes = ({ people, guard, publisher, zitadel }: People
         return { success: false, error: { code: "PEO-002", message: "Person not found" } };
       }
 
-      if (!person.zitadelUserId) {
+      if (person.idpUserPk === null) {
         set.status = 422;
-        return { success: false, error: { code: "PEO-007", message: "Person has no Zitadel login" } };
+        return { success: false, error: { code: "PEO-007", message: "Person has no IdP login" } };
       }
 
-      const zResult = await zitadel.requestPasswordReset(person.zitadelUserId);
-      if (!zResult.ok) {
+      const recoveryResult = await idp.requestPasswordReset(person.idpUserPk);
+      if (!recoveryResult.ok) {
+        // AppSec HIGH-7: nao vazar Authentik error message no response.
+        console.warn(`[idp] requestPasswordReset failed pk=${person.idpUserPk} code=${recoveryResult.code}`);
         set.status = 502;
-        return { success: false, error: { code: "ZIT-004", message: `Failed to request password reset: ${zResult.message}` } };
+        return { success: false, error: { code: "IDP-004", message: "Failed to request password reset" } };
       }
 
+      // Link NAO sai no response — viaja APENAS no payload do evento NATS.
+      // queue-manager consome esse evento, monta email PT-BR + branding ACDG.
       await publisher.publish(events.passwordResetRequested(auth.actorId, {
         personId: params.personId,
-        zitadelUserId: person.zitadelUserId,
+        idpUserId: person.zitadelUserId ?? "",
+        recoveryLink: recoveryResult.data.link,
       }));
 
-      set.status = 204;
+      set.status = 202;
+      return { meta: { timestamp: timestamp() } };
     });

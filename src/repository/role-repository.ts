@@ -16,6 +16,8 @@ type RoleQueryResult = {
 export type RoleRepository = {
   readonly assign: (personId: string, input: AssignRoleInput) => Promise<{ readonly role: SystemRole; readonly created: boolean }>;
   readonly listByPerson: (personId: string, active?: boolean) => Promise<readonly SystemRole[]>;
+  // Code-review HIGH-1: leitura para auth check antes de qualquer mutacao.
+  readonly findById: (personId: string, roleId: string) => Promise<SystemRole | null>;
   readonly deactivate: (personId: string, roleId: string) => Promise<SystemRole | null>;
   readonly reactivate: (personId: string, roleId: string) => Promise<SystemRole | null>;
   readonly query: (system: string, role?: string, active?: boolean) => Promise<readonly RoleQueryResult[]>;
@@ -52,6 +54,14 @@ export const createRoleRepository = (sql: Sql): RoleRepository => ({
       `;
       return { role: row!, created: true };
     });
+  },
+
+  findById: async (personId, roleId) => {
+    const [row] = await sql<SystemRole[]>`
+      SELECT ${sql.unsafe(SELECT_ROLE)} FROM system_roles
+      WHERE id = ${roleId} AND person_id = ${personId}
+    `;
+    return row ?? null;
   },
 
   listByPerson: async (personId, active) => {

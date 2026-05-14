@@ -5,7 +5,7 @@ import { createRolesRoutes } from "../../src/routes/roles.ts";
 import { createFakePersonRepository, createFakeRoleRepository } from "./fake-repositories.ts";
 import { createFakeAuthGuard, createFakeAuthGuardWithRoles } from "./fake-auth.ts";
 import { createFakePublisher } from "./fake-publisher.ts";
-import { createNoopZitadelClient } from "../../src/zitadel/index.ts";
+import { createNoopAuthentikClient } from "../../src/idp/index.ts";
 import { parseJson, dataAs, dataAsArray, type IdData, type RoleData } from "./test-types.ts";
 
 const setup = (guardRoles?: string[], guardSub?: string) => {
@@ -15,12 +15,12 @@ const setup = (guardRoles?: string[], guardSub?: string) => {
     ? createFakeAuthGuardWithRoles(guardRoles, guardSub)
     : createFakeAuthGuardWithRoles(["superadmin"]);
   const publisher = createFakePublisher();
-  const zitadel = createNoopZitadelClient();
+  const idp = createNoopAuthentikClient();
   // People routes use a permissive guard so createPerson helper works
   const peopleGuard = createFakeAuthGuard();
   const app = new Elysia()
-    .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, zitadel }))
-    .use(createRolesRoutes({ people, roles, guard, publisher, zitadel }));
+    .use(createPeopleRoutes({ people, guard: peopleGuard, publisher, idp }))
+    .use(createRolesRoutes({ people, roles, guard, publisher, idp }));
   return { app, people, roles, publisher };
 };
 
@@ -310,7 +310,7 @@ describe("Role assignment — self-assignment prevention", () => {
     const { app, people } = setup(["social-care:admin"], "zitadel-user-123");
     // Create person and link zitadelUserId to match the caller's sub
     const personId = await createPerson(app);
-    await people.setZitadelUserId(personId, "zitadel-user-123", "test@test.com");
+    await people.setZitadelUserId(personId, "zitadel-user-123", 100, "test@test.com");
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "owner" })),
@@ -323,7 +323,7 @@ describe("Role assignment — self-assignment prevention", () => {
   it("superadmin can assign roles to themselves", async () => {
     const { app, people } = setup(["superadmin"], "superadmin-user");
     const personId = await createPerson(app);
-    await people.setZitadelUserId(personId, "superadmin-user", "super@test.com");
+    await people.setZitadelUserId(personId, "superadmin-user", 101, "super@test.com");
 
     const res = await app.handle(
       new Request(`http://localhost/api/v1/people/${personId}/roles`, json({ system: "social-care", role: "admin" })),

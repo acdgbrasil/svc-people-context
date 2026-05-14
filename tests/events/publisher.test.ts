@@ -8,7 +8,6 @@ describe("events.personRegistered", () => {
     const event = events.personRegistered("actor-1", {
       personId: "p-1",
       fullName: "Ana Costa",
-      cpf: "52998224725",
       birthDate: "1990-05-15",
     });
     expect(event.subject).toBe("people.person.registered");
@@ -20,13 +19,13 @@ describe("events.personRegistered", () => {
     expect(event.payload.metadata.schemaVersion).toBe("1.0.0");
   });
 
-  it("handles optional cpf", () => {
+  it("does not leak CPF in event payload (LGPD minimizacao — AppSec HIGH-8)", () => {
     const event = events.personRegistered("actor-1", {
       personId: "p-2",
       fullName: "João Silva",
       birthDate: "1985-06-20",
     });
-    expect(event.payload.data.cpf).toBeUndefined();
+    expect((event.payload.data as Record<string, unknown>)["cpf"]).toBeUndefined();
   });
 });
 
@@ -106,15 +105,18 @@ describe("createNoopPublisher", () => {
 // ─── Outbox publisher ──────────────────────────────────────────
 
 describe("createOutboxPublisher", () => {
-  it("writes event to outbox table", async () => {
-    const inserted: Array<{ subject: string; payload: string }> = [];
+  it("writes event to outbox table using sql.json()", async () => {
+    const inserted: Array<{ subject: string; payload: unknown }> = [];
 
-    const fakeSql = ((strings: TemplateStringsArray, ...params: unknown[]) => {
-      if (strings.join("").includes("INSERT INTO outbox_events")) {
-        inserted.push({ subject: params[0] as string, payload: params[1] as string });
-      }
-      return Promise.resolve([]);
-    }) as unknown as import("postgres").Sql;
+    const fakeSql = Object.assign(
+      (strings: TemplateStringsArray, ...params: unknown[]) => {
+        if (strings.join("").includes("INSERT INTO outbox_events")) {
+          inserted.push({ subject: params[0] as string, payload: params[1] });
+        }
+        return Promise.resolve([]);
+      },
+      { json: (value: unknown) => value },
+    ) as unknown as import("postgres").Sql;
 
     const publisher = createOutboxPublisher(fakeSql);
     const event = events.personRegistered("actor-1", {
@@ -127,8 +129,8 @@ describe("createOutboxPublisher", () => {
 
     expect(inserted.length).toBe(1);
     expect(inserted[0]!.subject).toBe("people.person.registered");
-    const parsedPayload = JSON.parse(inserted[0]!.payload) as DomainEvent["payload"];
-    expect(parsedPayload.actorId).toBe("actor-1");
-    expect(parsedPayload.data.personId).toBe("p-1");
+    const payload = inserted[0]!.payload as DomainEvent["payload"];
+    expect(payload.actorId).toBe("actor-1");
+    expect(payload.data.personId).toBe("p-1");
   });
 });
