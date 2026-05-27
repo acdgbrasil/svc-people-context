@@ -137,3 +137,20 @@ API contracts defined in `contracts/services/people/` (separate repo):
 - Test files: `tests/**/*.test.ts`
 - Pattern: pure functions → easy to test without mocks
 - Coverage gate script: `scripts/check-coverage.js`
+
+## Reference Network — consulta fria (especialistas externos)
+
+Para FATOS de documentação de tecnologias (sintaxe, versão exata, comportamento), não responda de memória nem chute: consulte o especialista **EXTERNO read-only**, que cita a doc oficial offline (`infra/reference/`) ou recusa. Divisão: você (interno) conhece o código e **decide**; ele (externo) só entrega o **fato citado** — nunca vê seu código.
+
+Invocação: delegue isolado via `subagent_type: "acdg-ref:ref-<tech>"`, ou direto `/acdg-ref:ref-<tech> <pergunta>`.
+
+| Dúvida sobre… | Consulte |
+|---|---|
+| Elysia: handler, validação (TypeBox/`t`), lifecycle, plugin, Eden | `ref-elysia` |
+| SQL, tipos, funções, GUCs, índices (PostgreSQL) | `ref-postgresql` |
+| NATS/JetStream: subjects, consumers, ack, Outbox | `ref-nats` |
+| Authentik: OIDC/OAuth2 provider, claims/scopes | `ref-authentik` |
+
+Ainda **fora da rede** (P2): `jose` (JWT) e Bun runtime.
+
+Regras: passe a pergunta como **texto** (não mande "olhe meu arquivo X" — ele recusa). Se retornar `NÃO ENCONTRADO`, não invente: escale ou peça download da doc. Detalhes: `infra/reference-network/README.md`.
