@@ -27,11 +27,11 @@
     "eslint": "^9",
     "eslint-config-prettier": "^10",
     "prettier": "^3",
-    "typescript": "^6",
+    "typescript": "^7",
     "typescript-eslint": "^8"
   },
   "peerDependencies": {
-    "typescript": "^6"
+    "typescript": "^7"
   },
   "dependencies": {
     "elysia": "1.4.28",
